@@ -2,6 +2,7 @@ import argparse
 import sys
 from samplers import star_query_generator as star_sampler
 from samplers import path_query_generator as path_sampler
+from samplers import complex_query_generator as complex_sampler
 
 
 def get_options():
@@ -20,7 +21,7 @@ def get_options():
                         default=2)
     parser.add_argument("-s", "--shape",
                         help="Shape of subgraphs to generate",
-                        choices=["path", "star"],
+                        choices=["path", "star", "flower", "snowflake"],
                         default="star")
     parser.add_argument("-d", "--dataset",
                         help="Dataset name (optional, used for output file)",
@@ -42,3 +43,5 @@ if __name__ == "__main__":
         star_sampler.get_queries(None, args.dataset, args.size, args.queries, args.endpoint)
     elif args.shape == 'path':
         path_sampler.get_queries(None, args.dataset, args.size, args.queries, args.endpoint)
+    elif args.shape == 'flower' or args.shape == 'snowflake':
+        complex_sampler.get_queries(None, args.dataset, args.shape, args.size, args.queries, args.endpoint)
