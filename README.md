@@ -13,7 +13,7 @@ sampler.py -e endpoint -s shape
 The sampler supports several options: 
 * `-q` Maximum number of queries to generate
 * `-n` Number of triple patterns in the queries
-* `-s` Shape of subgraphs to generate. Options `star` or `path`
+* `-s` Shape of subgraphs to generate. Options `star`, `path`, `flowe`, or `snowflake`
 * `-d` Dataset name (optional, used for output file)
 
 ## Further configurations 
