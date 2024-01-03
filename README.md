@@ -1,4 +1,4 @@
-# subgraph-sampler 
+# rdf-subgraph-sampler 
 Sampling approach to obtain subgraph templates (or conjunctive queries) from RDF knowledge graphs and their cardinality. 
 
 ## Preparation 
