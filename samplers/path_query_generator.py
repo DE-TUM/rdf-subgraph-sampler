@@ -1,6 +1,5 @@
 import json
 from tqdm import tqdm
-import rdflib
 import requests
 import random
 from datetime import datetime
