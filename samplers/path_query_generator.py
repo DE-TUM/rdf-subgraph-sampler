@@ -4,13 +4,14 @@ import rdflib
 import requests
 import random
 from datetime import datetime
+import itertools  # Added for generating pair-wise inequality combinations
 
 # SEED_PATH_LEN: Tune according the capacity of the endpoint
-SEED_PATH_LEN = 4
+SEED_PATH_LEN = 6
 # SEED_BATCHES: Should be high (over 300) for short path queries, and small (10) for long path queries
 SEED_BATCHES = 10
 # ENDPOINT_LIMIT: Should be high for short path queries, adjust according to the capacity of the endpoint
-ENDPOINT_LIMIT = 5000
+ENDPOINT_LIMIT = 1 # 5000
 # QUERIES_PER_SEED: Set up to 1 for short path queries, 3 for long path queries (with length >= 5)
 QUERIES_PER_SEED = 2
 # P_EDGE: Can stay like this
@@ -32,12 +33,28 @@ def generate_template(n_triples, start=1):
 
 def get_seed_paths(path, endpoint_url, path_length):
     project = ["?p"+str(i) for i in range(1, path_length+1)]
+    query = "SELECT DISTINCT " + ' '.join(project) + " WHERE { " + path + " } " + \
+            "ORDER BY ASC(bif:rnd(2000000000)) " + "LIMIT " + str(ENDPOINT_LIMIT)
+    
+    print(f"Querying endpoint: {endpoint_url}")
+    print(f"Query: {query}")
+    
     r = requests.get(endpoint_url,
-                     params={'query': "SELECT DISTINCT " + ' '.join(project) + " WHERE { " + path + " } "
-                                      "ORDER BY ASC(bif:rnd(2000000000)) " +
-                                      "LIMIT " + str(ENDPOINT_LIMIT),
-                             'format': 'json'})
-    res = r.json()
+                     params={'query': query, 'format': 'json'})
+    
+    print(f"Status code: {r.status_code}")
+    print(f"Response headers: {r.headers}")
+    print(f"Response text (first 200 chars): {r.text[:200]}")
+    
+    if r.status_code != 200:
+        raise Exception(f"HTTP {r.status_code}: {r.text}")
+    
+    try:
+        res = r.json()
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse JSON. Full response: {r.text}")
+        raise e
+    
     res = res["results"]["bindings"]
     return res
 
@@ -73,6 +90,16 @@ def get_queries(graphfile, dataset_name, n_triples=1, n_queries=30000, endpoint_
 
     # Determine length of seed path
     spl = min(SEED_PATH_LEN, n_triples)
+
+    # ------------------ Pre-check for path existence ------------------
+    if endpoint_url:
+        print(f"Checking if any simple path of length {n_triples} exists …")
+        if not _path_exists(endpoint_url, n_triples, distinct_nodes=True):
+            print(f"No simple path of length {n_triples} found – aborting generation.")
+            return []
+        else:
+            print(f"Simple path of length {n_triples} found – continuing generation.")
+    # -----------------------------------------------------------------
 
     # Get candidate paths of length SEED_PATH_LEN
     print("Getting seed paths of length", spl)
@@ -143,6 +170,58 @@ def get_queries(graphfile, dataset_name, n_triples=1, n_queries=30000, endpoint_
 
     print("Done:", len(testdata))
     return testdata
+
+
+# NEW: -------------------------------------------------------------
+# Helper to build and execute an ASK query that checks if a simple
+# path (all nodes distinct) of a given length exists in the graph.
+# -----------------------------------------------------------------
+
+def _build_path_ask_query(length: int, distinct_nodes: bool = True) -> str:
+    """Return an ASK query that looks for at least one path of *length*.
+
+    Parameters
+    ----------
+    length : int
+        Number of edges in the path (>=1).
+    distinct_nodes : bool, default True
+        If True the query enforces that all nodes in the walk are pair-wise
+        different, i.e. searches for a *simple* path.
+    """
+    vars_ = [f"?v{i}" for i in range(length + 1)]
+    triple_lines = "\n  ".join(f"{vars_[i]} ?p{i+1} {vars_[i+1]} ." for i in range(length))
+
+    filter_part = ""
+    if distinct_nodes:
+        # Create all pair-wise inequality constraints
+        neq_parts = [f"{a} != {b}" for a, b in itertools.combinations(vars_, 2)]
+        filter_part = f"\n  FILTER ( {' && '.join(neq_parts)} )" if neq_parts else ""
+
+    return f"ASK WHERE {{\n  {triple_lines}{filter_part}\n}}"
+
+
+def _path_exists(endpoint_url: str, length: int, distinct_nodes: bool = True, timeout: int = 10) -> bool:
+    """Return True iff the KG accessible at *endpoint_url* contains a path of
+    exact *length* edges. If *distinct_nodes* is True, the nodes must all be
+    different. Handles network / parsing errors gracefully by returning
+    False.
+    """
+    ask_query = _build_path_ask_query(length, distinct_nodes)
+    print(f"Query: {ask_query}")
+    try:
+        r = requests.get(
+            endpoint_url,
+            params={'query': ask_query, 'format': 'json'},
+            timeout=timeout
+        )
+        if r.status_code != 200:
+            print(f"Warning: ASK query failed with HTTP {r.status_code}: {r.text[:200]}")
+            return False
+        res = r.json()
+        return bool(res.get('boolean'))
+    except Exception as e:
+        print(f"Error executing ASK query: {e}")
+        return False
 
 
 if __name__ == "__main__":

@@ -6,8 +6,11 @@ from collections import Counter
 import math
 import itertools
 from datetime import datetime
+import os
+import hashlib
 
 # SEED_SUBJECTS: Number of subjects to sample to obtain stars
+#SEED_SUBJECTS = 5000000
 SEED_SUBJECTS = 5000000
 # SUBJECTS_BATCH: Number of subjects to group in a single request to get stars
 SUBJECTS_BATCH = 50
@@ -18,16 +21,51 @@ QUERIES_PER_SEED = 1
 #QUERIES_PER_SEED = 3
 # P_INSTANTIATE: Probability of instantiating a star with objects. Set to 0.75 for long queries
 #P_INSTANTIATE = 0.65
-P_INSTANTIATE = 0.80
+#P_INSTANTIATE = 0.80
+P_INSTANTIATE = 0.
 # MAX_TP_INSTANTIATE: Maximum number of triple patterns to instantiate the objects
 MAX_TP_INSTANTIATE = 4
 # P_OBJECT: Probability of instantiating a specific object in the star. Set to 0.75 for long queries
-P_OBJECT = 0.75
+#P_OBJECT = 0.75
+P_OBJECT = 0.
 # P_OBJECT: Probability of instantiating a specific predicate. Set to 1.0 for long queries, or endpoint won't finish
-P_PREDICATE = 0.95
+P_PREDICATE = 1.
+# P_PREDICATE = 0.99
 # FINAL_QUERY_TIMEOUT: Can be set up higher for long queries
 FINAL_QUERY_TIMEOUT = 3
 
+
+def get_cache_filename(endpoint_url):
+    """Generate a cache filename based on the endpoint URL"""
+    endpoint_hash = hashlib.md5(endpoint_url.encode()).hexdigest()[:8]
+    return f"seed_subjects_cache_{endpoint_hash}.json"
+
+def load_cached_subjects(endpoint_url):
+    """Load cached seed subjects if available"""
+    cache_file = get_cache_filename(endpoint_url)
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r') as f:
+                data = json.load(f)
+                print(f"Loaded {len(data['subjects'])} cached seed subjects from {cache_file}")
+                return data['subjects']
+        except (json.JSONDecodeError, KeyError):
+            print(f"Cache file {cache_file} is corrupted, will regenerate")
+            os.remove(cache_file)
+    return None
+
+def save_cached_subjects(endpoint_url, subjects):
+    """Save seed subjects to cache"""
+    cache_file = get_cache_filename(endpoint_url)
+    cache_data = {
+        'endpoint': endpoint_url,
+        'timestamp': datetime.now().isoformat(),
+        'count': len(subjects),
+        'subjects': subjects
+    }
+    with open(cache_file, 'w') as f:
+        json.dump(cache_data, f)
+    print(f"Cached {len(subjects)} seed subjects to {cache_file}")
 
 def get_seed_subjects(endpoint_url):
     r = requests.get(endpoint_url,
@@ -119,20 +157,32 @@ def extend_star(query, predicate_counts, start):
     return query
 
 
-def get_batch_seed_subjects(endpoint_url):
+def get_batch_seed_subjects(endpoint_url, use_cache=True):
+    """Get seed subjects with optional caching"""
+    if use_cache:
+        cached_subjects = load_cached_subjects(endpoint_url)
+        if cached_subjects:
+            return cached_subjects
+    
+    print("Fetching fresh seed subjects...")
     subjects = []
     for i in tqdm(range(0, math.ceil(SEED_SUBJECTS / ENDPOINT_LIMIT))):
         subjects += get_seed_subjects(endpoint_url)
-    return list(set(subjects))
+    subjects = list(set(subjects))
+    
+    if use_cache:
+        save_cached_subjects(endpoint_url, subjects)
+    
+    return subjects
 
 
-def get_queries(graphfile, dataset_name, n_triples=1, n_queries=30000, endpoint_url=None, subjects=[], get_cardinality=True, outfile=True):
+def get_queries(graphfile, dataset_name, n_triples=1, n_queries=30000, endpoint_url=None, subjects=[], get_cardinality=True, outfile=True, use_cache=True):
     now = datetime.now()
 
     # Get seed subjects to explore stars
     if not subjects:
         print("Getting {} seed subjects in {} requests".format(SEED_SUBJECTS, math.ceil(SEED_SUBJECTS/ENDPOINT_LIMIT)))
-        subjects = get_batch_seed_subjects(endpoint_url)
+        subjects = get_batch_seed_subjects(endpoint_url, use_cache)
 
     # Get seed stars larger than n_triples:
     # stars is a list of pairs of the form [((predicates), [seed_entities])], where predicates is an n-triples-tuple
