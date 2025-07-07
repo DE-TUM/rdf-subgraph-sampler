@@ -128,31 +128,6 @@ QUERY_CONFIGURATIONS = [
 ### Batch-Specific Parameters
 * `QUERY_CONFIGURATIONS`: List of `(size, number_of_queries)` tuples defining the batch configurations
 
-## Batch Sampler
-
-The batch sampler (`batch_sampler.py`) allows you to generate multiple sets of queries with different sizes in a single run. This is particularly useful for:
-
-* **Experimental workflows**: Generate comprehensive datasets with various query complexities
-* **Performance testing**: Create queries of different sizes for benchmarking
-* **Systematic evaluation**: Ensure consistent generation across multiple configurations
-
-### Key Features:
-* **Automatic size-based naming**: Output files include size information (e.g., `LUBM_TEST_SIZE_3_timestamp.txt`)
-* **Dynamic object instantiation**: For star queries, min/max objects are automatically calculated based on query size
-* **Error resilience**: If one configuration fails, the process continues with remaining configurations
-* **Progress tracking**: Clear output showing completion status for each configuration
-
-### Example Batch Configuration:
-```python
-QUERY_CONFIGURATIONS = [
-    (3, 50),    # 50 queries of size 3 (max objects: 2)
-    (5, 100),   # 100 queries of size 5 (max objects: 3) 
-    (8, 75),    # 75 queries of size 8 (max objects: 4)
-    (12, 25),   # 25 queries of size 12 (max objects: 6)
-]
-```
-
-This configuration will generate 4 separate output files, each containing queries of the specified size and count.
 
 ## Generation Methods
 
