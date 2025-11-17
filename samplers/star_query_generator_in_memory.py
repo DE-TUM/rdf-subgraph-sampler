@@ -193,7 +193,7 @@ def hash_query_pattern(predicates, object_instantiation_pattern):
     return hashlib.md5(pattern_str.encode('utf-8')).hexdigest()
 
 def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_instantiated=0, 
-                       max_objects_instantiated=0, endpoint_url=None, get_cardinality=False, max_object_combinations=5):
+                       max_objects_instantiated=0, endpoint_url=None, get_cardinality=False, max_object_combinations=5, graph_name=None):
     """
     Generate a star query from a star data structure with configurable object instantiation.
     
@@ -266,7 +266,7 @@ def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_in
         
         # Join triple patterns
         where_clause = " . ".join(triple_patterns)
-        final_query = f"SELECT * WHERE {{ {where_clause} }}"
+        final_query = f"SELECT * FROM <{graph_name}> WHERE {{ {where_clause} }}"
         
         cardinality = -1
         if get_cardinality and endpoint_url:
@@ -317,7 +317,7 @@ def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_in
 def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000, 
                 endpoint_url=None, subjects=[], get_cardinality=False, 
                 outfile=True, use_cache=True, rdf_file=None, min_objects_instantiated=0, max_objects_instantiated=0,
-                p_predicate=1.0):
+                p_predicate=1.0, graph_name=None):
     
     if not os.path.exists(rdf_file):
         print(f"Error: RDF file {rdf_file} not found")
@@ -388,7 +388,7 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
             
             # Generate query from this star with object instantiation
             query_data = generate_star_query(star, n_triples, p_predicate, min_objects_instantiated, 
-                                           max_objects_instantiated, endpoint_url, get_cardinality)
+                                           max_objects_instantiated, endpoint_url, get_cardinality, graph_name)
             
             if query_data:
                 query_hash = query_data['query_hash']

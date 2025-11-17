@@ -34,7 +34,8 @@ def run_sampler_for_config(size, queries, config):
                 max_objects_instantiated=max_objects_instantiated,
                 rdf_file=config['RDF_FILE_PATH'], 
                 p_predicate=config['P_PREDICATE'], 
-                get_cardinality=config['GET_CARDINALITY']
+                get_cardinality=config['GET_CARDINALITY'],
+                graph_name=config['GRAPH_NAME']
             )
         else:
             print("Using endpoint-based star generation...")
