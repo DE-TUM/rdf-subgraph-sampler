@@ -365,9 +365,12 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
     random.shuffle(available_stars)
     star_index = 0
 
+    MAX_SHUFFLES = 30
+
     queries_at_last_reshuffle = 0
     had_reshuffle = False
-    
+    reshuffle_count = 0
+
     
 
     with tqdm(total=n_queries, desc="Generating unique queries") as pbar:
@@ -387,11 +390,18 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
                         print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
                         break
                     
+                                        # Check if we've hit the maximum number of shuffles
+                    if reshuffle_count >= MAX_SHUFFLES:
+                        print(f"\nReached maximum number of reshuffles ({MAX_SHUFFLES}). Stopping.")
+                        print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
+                        break
+                    
                     # Reshuffle and continue - there might be different combinations
                     random.shuffle(available_stars)
                     star_index = 0
                     queries_at_last_reshuffle = len(testdata)
                     had_reshuffle = True
+                    reshuffle_count += 1
                     print(f"\nReshuffling stars (found {duplicate_skipped} duplicates so far)...")
             
             star = available_stars[star_index]
