@@ -388,7 +388,7 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
             
             # Generate query from this star with object instantiation
             query_data = generate_star_query(star, n_triples, p_predicate, min_objects_instantiated, 
-                                           max_objects_instantiated, endpoint_url, get_cardinality, graph_name)
+                                           max_objects_instantiated, endpoint_url, get_cardinality, graph_name=graph_name)
             
             if query_data:
                 query_hash = query_data['query_hash']

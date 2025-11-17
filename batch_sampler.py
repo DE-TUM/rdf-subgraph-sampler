@@ -88,7 +88,8 @@ if __name__ == "__main__":
         'SAMPLING_METHOD': SAMPLING_METHOD,
         'P_EDGE': P_EDGE,
         'P_NODE': P_NODE,
-        'P_START_END': P_START_END
+        'P_START_END': P_START_END,
+        'GRAPH_NAME': GRAPH_NAME
     }
 
     print(f"Starting batch generation for {len(QUERY_CONFIGURATIONS)} configurations...")
@@ -101,6 +102,7 @@ if __name__ == "__main__":
             run_sampler_for_config(size, queries, config)
             print(f"✓ Completed: {queries} queries of size {size}")
         except Exception as e:
+            raise
             print(f"✗ Failed for size {size}, queries {queries}: {str(e)}")
             # Continue with next configuration even if one fails
             continue

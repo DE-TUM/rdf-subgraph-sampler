@@ -27,8 +27,6 @@ P_START_END = 0.3  # Probability of instantiating start/end node (non-seed) in p
 # Specify multiple query sizes and how many queries to generate for each size
 # Format: [(size, number_of_queries), (size, number_of_queries), ...]
 QUERY_CONFIGURATIONS = [
-    (1, 10),    # Generate 10 queries of size 3 (max objects: ceil(0.5*3) = 2)
-    (2, 15),    # Generate 15 queries of size 5 (max objects: ceil(0.5*5) = 3)
-    (3, 20),    # Generate 20 queries of size 7 (max objects: ceil(0.5*7) = 4)
+    (15, 10),    # Generate 10 queries of size 3 (max objects: ceil(0.5*3) = 2)
 ] 
 
