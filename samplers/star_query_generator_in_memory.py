@@ -364,6 +364,9 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
     available_stars = suitable_stars.copy()
     random.shuffle(available_stars)
     star_index = 0
+
+    queries_at_last_reshuffle = 0
+    had_reshuffle = False
     
     
 
@@ -378,9 +381,17 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
                     print("\nExhausted all available stars without finding duplicates. Dataset may have limited diversity.")
                     break
                 else:
+                    # Check if we had a reshuffle before and made no progress
+                    if had_reshuffle and len(testdata) == queries_at_last_reshuffle:
+                        print(f"\nNo new queries found since last reshuffle. Dataset exhausted.")
+                        print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
+                        break
+                    
                     # Reshuffle and continue - there might be different combinations
                     random.shuffle(available_stars)
                     star_index = 0
+                    queries_at_last_reshuffle = len(testdata)
+                    had_reshuffle = True
                     print(f"\nReshuffling stars (found {duplicate_skipped} duplicates so far)...")
             
             star = available_stars[star_index]
