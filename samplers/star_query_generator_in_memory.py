@@ -266,7 +266,10 @@ def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_in
         
         # Join triple patterns
         where_clause = " . ".join(triple_patterns)
-        final_query = f"SELECT * FROM <{graph_name}> WHERE {{ {where_clause} }}"
+        if graph_name:
+            final_query = f"SELECT * FROM <{graph_name}> WHERE {{ {where_clause} }}"
+        else:
+            final_query = f"SELECT * WHERE {{ {where_clause} }}"
         
         cardinality = -1
         if get_cardinality and endpoint_url:
