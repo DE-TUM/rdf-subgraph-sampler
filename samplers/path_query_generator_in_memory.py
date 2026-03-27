@@ -291,13 +291,13 @@ def _save_queries(generated: List[dict], dataset_name: str, n_triples: int,
 
 
 def _get_cardinality(endpoint_url: str, where_clause: str, timeout: int = FINAL_QUERY_TIMEOUT) -> int:
-    query = f"SELECT (COUNT(*) as ?c) WHERE {{ {where_clause} }}"
+    query = f"SELECT (COUNT(*) as ?count) WHERE {{ {where_clause} }}"
     try:
         r = requests.get(endpoint_url, params={'query': query, 'format': 'json'}, timeout=timeout)
         if r.status_code == 200:
             bindings = r.json().get('results', {}).get('bindings', [])
-            if bindings and 'c' in bindings[0]:
-                return int(bindings[0]['c']['value'])
+            if bindings and 'count' in bindings[0]:
+                return int(bindings[0]['count']['value'])
     except Exception as e:
         print(f"Cardinality request failed: {e}")
     return -1

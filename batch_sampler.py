@@ -6,6 +6,7 @@ from samplers import star_query_generator_in_memory as file_sampler_in_memory
 from samplers import path_query_generator as path_sampler
 from samplers import path_query_generator_in_memory as path_sampler_in_memory
 #from samplers import complex_query_generator as complex_sampler
+from samplers import complex_query_generator_in_memory as complex_sampler_in_memory
 
 # Import configuration
 from batch_sampler_config import *
@@ -61,6 +62,24 @@ def run_sampler_for_config(size, queries, config):
         else:
             print("Using endpoint-based path generation...")
             path_sampler.get_queries(None, dataset_name, size, queries, config['ENDPOINT'])
+    elif config['SHAPE'] == 'complex':
+        if config['IN_MEMORY']:
+            print("Using In Memory complex generation...")
+            complex_sampler_in_memory.get_queries(
+                rdf_file=config['RDF_FILE_PATH'],
+                dataset_name=dataset_name,
+                query_shape=config['QUERY_SHAPE'],
+                n_queries=queries,
+                endpoint_url=config['ENDPOINT'] if config['GET_CARDINALITY'] else None,
+                outfile=True,
+                get_cardinality=config['GET_CARDINALITY'],
+                use_cache=config['USE_CACHE'],
+                p_edge=config['P_EDGE'],
+                p_node=config['P_NODE'],
+                graph_name=config['GRAPH_NAME']
+            )
+        else:
+            raise ValueError("Complex shape generation requires IN_MEMORY=True")
     #elif config['SHAPE'] == 'flower' or config['SHAPE'] == 'snowflake':
     #    complex_sampler.get_queries(None, dataset_name, config['SHAPE'], size, queries, config['ENDPOINT'])
 
@@ -89,7 +108,8 @@ if __name__ == "__main__":
         'P_EDGE': P_EDGE,
         'P_NODE': P_NODE,
         'P_START_END': P_START_END,
-        'GRAPH_NAME': GRAPH_NAME
+        'GRAPH_NAME': GRAPH_NAME,
+        'QUERY_SHAPE': globals().get('QUERY_SHAPE', None)
     }
 
     print(f"Starting batch generation for {len(QUERY_CONFIGURATIONS)} configurations...")

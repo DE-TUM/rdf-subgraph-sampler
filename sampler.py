@@ -7,7 +7,8 @@ from samplers import path_query_generator_in_memory as path_sampler_in_memory
 #from samplers import complex_query_generator as complex_sampler
 
 # Import configuration
-from sampler_config import *
+#from sampler_config import *
+from batch_sampler_config import *
 
 
 if __name__ == "__main__":  
