@@ -184,13 +184,16 @@ def get_query_cardinality(query, endpoint_url, timeout=CARDINALITY_TIMEOUT):
         print("WARNING: Error computing cardinality - returning -1")
         return -1
 
-def hash_query_pattern(predicates, object_instantiation_pattern):
-    """Create a hash for a query pattern including predicate set and object instantiation pattern."""
-    # Sort predicates to ensure consistent hashing
-    sorted_predicates = sorted(predicates)
-    # Create a string representation including object instantiation pattern
-    pattern_str = '|'.join(sorted_predicates) + f"_OBJ:{sorted(object_instantiation_pattern)}"
-    return hashlib.md5(pattern_str.encode('utf-8')).hexdigest()
+def hash_query_pattern(selected_triples, instantiated_indices):
+    """Hash including predicates, which positions are bound, and bound object URIs."""
+    instantiated_set = set(instantiated_indices)
+    parts = []
+    for i, (pred, obj) in enumerate(sorted(selected_triples)):
+        if i in instantiated_set:
+            parts.append(f"{pred}={obj}")
+        else:
+            parts.append(f"{pred}=?")
+    return hashlib.md5("|".join(parts).encode('utf-8')).hexdigest()
 
 def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_instantiated=0, 
                        max_objects_instantiated=0, endpoint_url=None, get_cardinality=False, max_object_combinations=5, graph_name=None):
@@ -271,10 +274,6 @@ def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_in
         else:
             final_query = f"SELECT * WHERE {{ {where_clause} }}"
         
-        cardinality = -1
-        if get_cardinality and endpoint_url:
-            cardinality = get_query_cardinality(final_query, endpoint_url)
-        
         triples_list = []
         for pattern in triple_patterns:
             pattern = pattern.strip()
@@ -297,14 +296,14 @@ def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_in
                         obj_part = parts[1]
                         triples_list.append(['?s', pred_part, obj_part])
         
-        # Create query pattern hash for deduplication (includes object instantiation pattern)
-        query_hash = hash_query_pattern(selected_predicates, instantiated_indices)
+        # Create query pattern hash for deduplication (includes bound object URIs)
+        query_hash = hash_query_pattern(selected_triples, instantiated_indices)
         
         return {
             "query": final_query,
             "triples": triples_list,
             "x": entities,  # Instantiated predicates
-            "y": cardinality,  # Query cardinality
+            "y": -1,  # Query cardinality (computed after dedup check)
             "source_subject": star_data['subject'],
             "star_size": star_data['star_size'],
             "query_hash": query_hash,  # For deduplication (includes object pattern)
@@ -373,9 +372,14 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
     # Adaptive safety net: scales with star count so large datasets aren't killed prematurely
     MAX_CONSECUTIVE_FAILURES = max(500, len(available_stars) // 10)
 
+    SLOW_QUERY_THRESHOLD = 60  # seconds — a query taking this long signals exhaustion
+    MAX_SLOW_QUERIES = 5       # stop after this many consecutive slow queries
+
     queries_at_start_of_pass = 0
     reshuffle_count = 0
     consecutive_failures = 0
+    slow_query_streak = 0
+    last_success_time = time.time()
 
     with tqdm(total=n_queries, desc="Generating unique queries") as pbar:
         while len(testdata) < n_queries:
@@ -432,9 +436,26 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
                 # This is a new unique query — reset consecutive failure counter
                 consecutive_failures = 0
                 seen_query_hashes.add(query_hash)
+
+                # Compute cardinality AFTER dedup check to avoid wasting endpoint calls
+                if get_cardinality and endpoint_url:
+                    query_data['y'] = get_query_cardinality(query_data['query'], endpoint_url)
+
                 testdata.append(query_data)
                 pbar.update(1)
-                
+
+                # Time-based early stopping
+                elapsed = time.time() - last_success_time
+                if elapsed > SLOW_QUERY_THRESHOLD:
+                    slow_query_streak += 1
+                    if slow_query_streak >= MAX_SLOW_QUERIES:
+                        print(f"\nStopping: {MAX_SLOW_QUERIES} consecutive queries each took >{SLOW_QUERY_THRESHOLD}s. "
+                              f"Generated {len(testdata)}/{n_queries} queries.")
+                        break
+                else:
+                    slow_query_streak = 0
+                last_success_time = time.time()
+
                 # Track cardinality calculation failures
                 if get_cardinality and query_data['y'] == -1:
                     cardinality_failures += 1
