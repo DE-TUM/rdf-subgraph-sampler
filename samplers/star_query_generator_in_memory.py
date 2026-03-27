@@ -216,8 +216,8 @@ def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_in
     if len(triples) < n_triples:
         return None
     
-    # Take the first n_triples (preserving duplicates as they appear)
-    selected_triples = triples[:n_triples]
+    # Randomly select n_triples from available triples to maximize predicate diversity
+    selected_triples = random.sample(triples, n_triples)
     selected_predicates = [pred for pred, obj in selected_triples]
     
     # Validate and set object instantiation range
@@ -368,50 +368,46 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
     random.shuffle(available_stars)
     star_index = 0
 
-    MAX_SHUFFLES = 30
-    MAX_CONSECUTIVE_FAILURES = 200  # stop if 200 attempts in a row produce duplicates
+    MAX_RESHUFFLES = 30
+    MIN_NEW_QUERIES_PER_PASS = 5  # stop if a full pass yields fewer than this many new queries
+    # Adaptive safety net: scales with star count so large datasets aren't killed prematurely
+    MAX_CONSECUTIVE_FAILURES = max(500, len(available_stars) // 10)
 
-    queries_at_last_reshuffle = 0
-    had_reshuffle = False
+    queries_at_start_of_pass = 0
     reshuffle_count = 0
     consecutive_failures = 0
 
     with tqdm(total=n_queries, desc="Generating unique queries") as pbar:
         while len(testdata) < n_queries:
 
-
             # Select star without replacement
             if star_index >= len(available_stars):
-                # If we've exhausted all stars, reshuffle and start over
-                if duplicate_skipped == 0:
-                    print("\nExhausted all available stars without finding duplicates. Dataset may have limited diversity.")
+                new_in_this_pass = len(testdata) - queries_at_start_of_pass
+
+                if new_in_this_pass == 0:
+                    print(f"\nNo new queries found in full pass through all stars. Dataset exhausted.")
+                    print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
                     break
-                else:
-                    # Check if we had a reshuffle before and made no progress
-                    if had_reshuffle and len(testdata) == queries_at_last_reshuffle:
-                        print(f"\nNo new queries found since last reshuffle. Dataset exhausted.")
-                        print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
-                        break
 
-                                        # Check if we've hit the maximum number of shuffles
-                    if reshuffle_count >= MAX_SHUFFLES:
-                        print(f"\nReached maximum number of reshuffles ({MAX_SHUFFLES}). Stopping.")
-                        print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
-                        break
+                if new_in_this_pass < MIN_NEW_QUERIES_PER_PASS:
+                    print(f"\nOnly {new_in_this_pass} new queries in last pass (threshold: {MIN_NEW_QUERIES_PER_PASS}). "
+                          f"Diminishing returns — stopping.")
+                    print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
+                    break
 
-                    # Don't reshuffle if we're already hitting consecutive failure limit
-                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                        print(f"\nWARNING: Stopping early — {consecutive_failures} consecutive duplicates. "
-                              f"Generated {len(testdata)}/{n_queries} queries.")
-                        break
+                if reshuffle_count >= MAX_RESHUFFLES:
+                    print(f"\nReached maximum number of reshuffles ({MAX_RESHUFFLES}). Stopping.")
+                    print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
+                    break
 
-                    # Reshuffle and continue - there might be different combinations
-                    random.shuffle(available_stars)
-                    star_index = 0
-                    queries_at_last_reshuffle = len(testdata)
-                    had_reshuffle = True
-                    reshuffle_count += 1
-                    print(f"\nReshuffling stars (found {duplicate_skipped} duplicates so far)...")
+                # Still productive — reshuffle and continue
+                random.shuffle(available_stars)
+                star_index = 0
+                queries_at_start_of_pass = len(testdata)
+                reshuffle_count += 1
+                consecutive_failures = 0
+                print(f"\nReshuffle #{reshuffle_count}: {new_in_this_pass} new queries in last pass, "
+                      f"{len(testdata)}/{n_queries} total so far...")
 
             star = available_stars[star_index]
             star_index += 1
