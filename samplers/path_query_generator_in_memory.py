@@ -350,6 +350,8 @@ def get_queries(rdf_file: str,
     with tqdm(total=n_queries, desc="Generating") as pbar:
         last_save_count = 0  # Track when we last saved (shared across both methods)
         
+        MAX_CONSECUTIVE_FAILURES = 200  # stop if 200 attempts in a row produce duplicates
+
         if sampling_method in ["dfs", "bfs"]:
             # Systematic approach for DFS/BFS - go through each subject once
             subjects = list(adj.keys())
@@ -358,15 +360,17 @@ def get_queries(rdf_file: str,
             attempts = 0
             total_sampling_time = 0.0
             successful_subjects = 0
-            
+            consecutive_failures = 0
+            MAX_RESHUFFLES = 30
+
             # Create a separate progress bar for systematic subject processing
-            with tqdm(total=len(subjects), desc=f"{sampling_method.upper()} Subjects", 
+            with tqdm(total=len(subjects), desc=f"{sampling_method.upper()} Subjects",
                      position=1, leave=False) as subject_pbar:
-                
+
                 while len(generated) < n_queries and subject_idx < len(subjects):
                     # Try current subject
                     start = subjects[subject_idx]
-                    
+
                     # Time the sampling function call if timing is enabled
                     if enable_timing:
                         start_time = time.time()
@@ -376,17 +380,18 @@ def get_queries(rdf_file: str,
                         total_sampling_time += sampling_time
                     else:
                         sp = sample_func(adj, n_triples, start_node=start)
-                    
+
                     if sp:
                         successful_subjects += 1
                         nodes, preds = sp
                         where_clause, entities = _build_query_from_path(nodes, preds, p_edge=p_edge, p_node=p_node, p_start_end=p_start_end)
                         query_str = f"SELECT * WHERE {{ {where_clause} }}"
                         hash_key = hash(where_clause) # simpler hashing for paths since the path is ordered and variable naming always the same
-                        
+
                         if hash_key not in seen_hashes:
                             seen_hashes.add(hash_key)
-                            
+                            consecutive_failures = 0
+
                             y = -1
                             if endpoint_url and get_cardinality:
                                 y = _get_cardinality(endpoint_url, where_clause)
@@ -399,31 +404,43 @@ def get_queries(rdf_file: str,
                                 "triples": triple_list
                             })
                             pbar.update(1)
-                            
+
                             # Periodic saving every SAVE_INTERVAL queries
                             if outfile and len(generated) - last_save_count >= SAVE_INTERVAL:
                                 _save_queries(generated, dataset_name, n_triples, sampling_method, now, is_final=False)
                                 last_save_count = len(generated)
+                        else:
+                            consecutive_failures += 1
+                            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                                print(f"\nWARNING: Stopping early — {consecutive_failures} consecutive duplicates. "
+                                      f"Generated {len(generated)}/{n_queries} queries.")
+                                break
 
-                    
+
                     # Update subject progress bar with current stats
                     subject_idx += 1
                     success_rate = (successful_subjects / subject_idx * 100) if subject_idx > 0 else 0
                     subject_pbar.set_description(f"{sampling_method.upper()} | Queries: {len(generated)}/{n_queries} | Success: {success_rate:.1f}%")
                     subject_pbar.update(1)
-                    
+
                     # Early exit if we have enough queries
                     if len(generated) >= n_queries:
                         break
-                
-                # If we've gone through all subjects but need more queries, 
-                # shuffle and start over (but this shouldn't usually happen with DFS/BFS)
-                if subject_idx >= len(subjects) and len(generated) < n_queries:
-                    random.shuffle(subjects)
-                    subject_idx = 0
-                    attempts += 1
 
-            
+                # If we've gone through all subjects but need more queries,
+                # shuffle and start over (with limits)
+                if subject_idx >= len(subjects) and len(generated) < n_queries:
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        pass  # already printed warning above
+                    elif attempts >= MAX_RESHUFFLES:
+                        print(f"\nReached maximum number of reshuffles ({MAX_RESHUFFLES}). Stopping.")
+                        print(f"Generated {len(generated)} unique queries out of {n_queries} requested.")
+                    else:
+                        random.shuffle(subjects)
+                        subject_idx = 0
+                        attempts += 1
+
+
             # Print timing summary if timing was enabled
             if enable_timing:
                 avg_time = total_sampling_time / subject_idx if subject_idx > 0 else 0
@@ -436,6 +453,7 @@ def get_queries(rdf_file: str,
         else:
             # Random approach for random walk methods
             attempts = 0
+            consecutive_failures = 0
             while len(generated) < n_queries and attempts < 100:
                 attempts += 1
                 sp = sample_func(adj, n_triples)
@@ -447,7 +465,13 @@ def get_queries(rdf_file: str,
                 query_str = f"SELECT * WHERE {{ {where_clause} }}"
                 hash_key = hash(where_clause)
                 if hash_key in seen_hashes:
+                    consecutive_failures += 1
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        print(f"\nWARNING: Stopping early — {consecutive_failures} consecutive duplicates. "
+                              f"Generated {len(generated)}/{n_queries} queries.")
+                        break
                     continue
+                consecutive_failures = 0
                 seen_hashes.add(hash_key)
 
                 y = -1
@@ -462,7 +486,7 @@ def get_queries(rdf_file: str,
                     "triples": triple_list
                 })
                 pbar.update(1)
-                
+
                 # Periodic saving every SAVE_INTERVAL queries
                 if outfile and len(generated) - last_save_count >= SAVE_INTERVAL:
                     _save_queries(generated, dataset_name, n_triples, sampling_method, now, is_final=False)

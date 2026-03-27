@@ -369,17 +369,17 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
     star_index = 0
 
     MAX_SHUFFLES = 30
+    MAX_CONSECUTIVE_FAILURES = 200  # stop if 200 attempts in a row produce duplicates
 
     queries_at_last_reshuffle = 0
     had_reshuffle = False
     reshuffle_count = 0
-
-    
+    consecutive_failures = 0
 
     with tqdm(total=n_queries, desc="Generating unique queries") as pbar:
         while len(testdata) < n_queries:
 
-                            
+
             # Select star without replacement
             if star_index >= len(available_stars):
                 # If we've exhausted all stars, reshuffle and start over
@@ -392,13 +392,19 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
                         print(f"\nNo new queries found since last reshuffle. Dataset exhausted.")
                         print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
                         break
-                    
+
                                         # Check if we've hit the maximum number of shuffles
                     if reshuffle_count >= MAX_SHUFFLES:
                         print(f"\nReached maximum number of reshuffles ({MAX_SHUFFLES}). Stopping.")
                         print(f"Generated {len(testdata)} unique queries out of {n_queries} requested.")
                         break
-                    
+
+                    # Don't reshuffle if we're already hitting consecutive failure limit
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        print(f"\nWARNING: Stopping early — {consecutive_failures} consecutive duplicates. "
+                              f"Generated {len(testdata)}/{n_queries} queries.")
+                        break
+
                     # Reshuffle and continue - there might be different combinations
                     random.shuffle(available_stars)
                     star_index = 0
@@ -406,23 +412,29 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
                     had_reshuffle = True
                     reshuffle_count += 1
                     print(f"\nReshuffling stars (found {duplicate_skipped} duplicates so far)...")
-            
+
             star = available_stars[star_index]
             star_index += 1
-            
+
             # Generate query from this star with object instantiation
-            query_data = generate_star_query(star, n_triples, p_predicate, min_objects_instantiated, 
+            query_data = generate_star_query(star, n_triples, p_predicate, min_objects_instantiated,
                                            max_objects_instantiated, endpoint_url, get_cardinality, graph_name=graph_name)
-            
+
             if query_data:
                 query_hash = query_data['query_hash']
-                
+
                 # Check if we've already seen this query pattern
                 if query_hash in seen_query_hashes:
                     duplicate_skipped += 1
+                    consecutive_failures += 1
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        print(f"\nWARNING: Stopping early — {consecutive_failures} consecutive duplicates. "
+                              f"Generated {len(testdata)}/{n_queries} queries.")
+                        break
                     continue
-                
-                # This is a new unique query
+
+                # This is a new unique query — reset consecutive failure counter
+                consecutive_failures = 0
                 seen_query_hashes.add(query_hash)
                 testdata.append(query_data)
                 pbar.update(1)
