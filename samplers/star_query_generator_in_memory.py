@@ -188,11 +188,12 @@ def hash_query_pattern(selected_triples, instantiated_indices):
     """Hash including predicates, which positions are bound, and bound object URIs."""
     instantiated_set = set(instantiated_indices)
     parts = []
-    for i, (pred, obj) in enumerate(sorted(selected_triples)):
+    for i, (pred, obj) in enumerate(selected_triples):  # original order to match instantiated_indices
         if i in instantiated_set:
             parts.append(f"{pred}={obj}")
         else:
             parts.append(f"{pred}=?")
+    parts.sort()  # canonical order for hashing
     return hashlib.md5("|".join(parts).encode('utf-8')).hexdigest()
 
 def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_instantiated=0, 
