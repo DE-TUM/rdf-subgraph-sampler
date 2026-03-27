@@ -1,11 +1,12 @@
 # rdf-subgraph-sampler 
-Sampling approach to obtain conjunctive queries from RDF knowledge graphs and their cardinality. The tool supports both endpoint-based and in-memory generation methods for extracting star and path-shaped query patterns.
+Sampling approach to obtain conjunctive queries from RDF knowledge graphs and their cardinality. The tool supports both endpoint-based and in-memory generation methods for extracting star, path, and arbitrary complex query patterns.
 
 ## Preparation 
 * Clone the repository
 * Install the required Python libraries: `tqdm` and `requests`
 * For endpoint-based generation: Load the RDF knowledge graph in a SPARQL endpoint
-* For in-memory generation: Have your RDF file available locally (supports .nt format)
+* For in-memory generation: Have your RDF file available locally (supports .nt format) (but you also need to load it if you want to calculate cardinalities)
+* We recommend using in-memory generation whenever feasible, it is sgnificantly faster
 
 ## Usage 
 
@@ -35,7 +36,7 @@ Configuration file for single query generation (`sampler.py`). Contains all stan
 ENDPOINT = "http://localhost:8890/sparql"  # URL of the SPARQL endpoint where the KG is hosted (required)
 QUERIES = 10  # Maximum number of queries to generate
 SIZE = 3  # Number of triple patterns in the queries
-SHAPE = "path"  # Shape of subgraphs to generate: "path", "star", "flower", "snowflake"
+SHAPE = "path"  # Shape of subgraphs to generate: "path", "star", or "complex"
 DATASET = "LUBM_TEST"  # Dataset name (used for output file)
 USE_CACHE = True  # Whether to use cached search structures for in memory generation (created on first run for new rdf file)
 IN_MEMORY = True  # Whether to use in-memory search and generation instead of sparql endpoint
@@ -51,10 +52,13 @@ MAX_OBJECTS_INSTANTIATED = 5  # Maximum number of objects to keep instantiated
 P_PREDICATE = 1.0  # Probability of instantiating predicates (1.0 = always instantiate, 0.0 = never instantiate)
 
 # Path-specific configuration
-SAMPLING_METHOD = "dfs"  # Sampling method in-memory: "dfs", "bfs" or "random_walk" 
+SAMPLING_METHOD = "dfs"  # Sampling method in-memory: "dfs", "bfs" or "random_walk"
 P_EDGE = 1.0  # Probability of instantiating a predicate in path queries (1.0 = always instantiate, 0.0 = never instantiate)
 P_NODE = 0.3  # Probability of instantiating an intermediate node in path queries
 P_START_END = 0.3  # Probability of instantiating start/end node (non-seed) in path queries
+
+# Complex-specific configuration
+QUERY_SHAPE = None  # Shape string, e.g. "?a B ?b, ?b B ?c, ?c B ?a"
 ```
 
 ### `batch_sampler_config.py`
@@ -66,7 +70,7 @@ Configuration file for batch query generation (`batch_sampler.py`). Includes all
 
 # General configuration
 ENDPOINT = "http://localhost:8890/sparql"  # URL of the SPARQL endpoint where the KG is hosted (required)
-SHAPE = "path"  # Shape of subgraphs to generate: "path", "star", "flower", "snowflake"
+SHAPE = "complex"  # Shape of subgraphs to generate: "path", "star", or "complex"
 DATASET = "LUBM_TEST"  # Dataset name (used for output file)
 USE_CACHE = True  # Whether to use cached search structures for in memory generation
 IN_MEMORY = True  # Whether to use in-memory search and generation instead of sparql endpoint
@@ -78,13 +82,16 @@ GET_CARDINALITY = True  # Whether to compute cardinality for generated queries i
 # Star-specific configuration
 # NOTE: MIN_OBJECTS_INSTANTIATED and MAX_OBJECTS_INSTANTIATED are calculated dynamically
 # based on query size (min=0, max=ceil(0.5 * size)) in batch sampling
-P_PREDICATE = 1.0  # Probability of instantiating predicates (1.0 = always instantiate, 0.0 = never instantiate)
+P_PREDICATE = 1.0  # Probability of instantiating predicates
 
 # Path-specific configuration
 SAMPLING_METHOD = "dfs"  # Sampling method: "dfs", "bfs" or "random_walk"
-P_EDGE = 1.0  # Probability of instantiating a predicate in path queries (1.0 = always instantiate, 0.0 = never instantiate)
-P_NODE = 0.3  # Probability of instantiating an intermediate node in path queries
-P_START_END = 0.3  # Probability of instantiating start/end node (non-seed) in path queries
+P_EDGE = 1.0  # Probability of instantiating a predicate
+P_NODE = 0.3  # Probability of instantiating an intermediate node
+P_START_END = 0.3  # Probability of instantiating start/end node
+
+# Complex-specific configuration
+QUERY_SHAPE = "?r B ?a, ?r B ?b, ?a B ?c, ?a B ?d, ?b B ?e, ?b B ?f"  # Binary tree
 
 # ====== BATCH CONFIGURATION ======
 # Specify multiple query sizes and how many queries to generate for each size
@@ -103,7 +110,7 @@ QUERY_CONFIGURATIONS = [
 * `ENDPOINT`: URL of the SPARQL endpoint (required for endpoint-based generation and cardinality computation)
 * `QUERIES`: Number of queries to generate (single mode only)
 * `SIZE`: Number of triple patterns in the queries (single mode only)
-* `SHAPE`: Shape of subgraphs to generate - `"path"` or `"star"`
+* `SHAPE`: Shape of subgraphs to generate - `"path"`, `"star"`, or `"complex"`
 * `DATASET`: Dataset name used for output file naming
 * `USE_CACHE`: Whether to use cached search structures for faster generation (default: True) - only for in-memory Generation
 * `IN_MEMORY`: Whether to use in-memory generation instead of SPARQL endpoint queries (default: True)
@@ -125,9 +132,59 @@ QUERY_CONFIGURATIONS = [
 * `P_NODE`: Probability of instantiating an intermediate node in path queries (default: 0.3)
 * `P_START_END`: Probability of instantiating start/end node (non-seed) in path queries (default: 0.3)
 
-### Batch-Specific Parameters
-* `QUERY_CONFIGURATIONS`: List of `(size, number_of_queries)` tuples defining the batch configurations
+### Complex-Specific Parameters
+* `QUERY_SHAPE`: A shape string defining the query topology. Each comma-separated group is a triple pattern: `<subject> <predicate_binding> <object>`.
 
+**Node tokens:**
+* `?name` - always a variable in the generated query
+* `name` - always bound (instantiated with the matched URI)
+* `?name/B` - probabilistically bound (controlled by `P_NODE`)
+
+**Predicate tokens:**
+* `B` - always bound
+* `?` - always a variable
+* `?/B` - probabilistically bound (controlled by `P_EDGE`)
+
+Shared variable names across triples define the query topology. For example, `?o` appearing as the object in one triple and the subject in another creates a join.
+
+**Example shapes:**
+
+```
+# Binary tree depth 3 (6 triples):
+#          ?r
+#         / \
+#       ?a   ?b
+#       /\   /\
+#     ?c ?d ?e ?f
+QUERY_SHAPE = "?r B ?a, ?r B ?b, ?a B ?c, ?a B ?d, ?b B ?e, ?b B ?f"
+
+# Flower — path with stars at each node (7 triples):
+QUERY_SHAPE = "?a B ?l1, ?a B ?l2, ?a B ?b, ?b B ?m1, ?b B ?c, ?c B ?r1, ?c B ?r2"
+
+# Cycle / triangle (3 triples):
+QUERY_SHAPE = "?a B ?b, ?b B ?c, ?c B ?a"
+
+# Diamond (4 triples):
+QUERY_SHAPE = "?a B ?b, ?a B ?c, ?b B ?d, ?c B ?d"
+
+# Snowflake — star center with branching arms (8 triples):
+QUERY_SHAPE = "?center B ?a, ?center B ?b, ?center B ?c, ?center B ?d, ?a B ?l1, ?a B ?l2, ?b B ?r1, ?b B ?r2"
+```
+
+The complex generator uses DFS-based subgraph matching with both forward and reverse adjacency lookups, so it supports shapes where a node appears as both subject and object (e.g., cycles, diamonds).
+
+### Batch-Specific Parameters
+* `QUERY_CONFIGURATIONS`: List of `(size, number_of_queries)` tuples defining the batch configurations. For `SHAPE = "complex"`, the size is derived from `QUERY_SHAPE` and the first element is ignored.
+
+### Bulk Shape Generation
+
+To generate queries for multiple shapes at once, use `generate_all_shapes.py`. Edit the `SHAPES` dictionary and configuration at the top of the file, then run:
+
+```bash
+python generate_all_shapes.py
+```
+
+This produces one JSON file per shape, named `{DATASET}_{shape_name}.json`.
 
 ## Generation Methods
 
@@ -138,6 +195,8 @@ In-memory generation loads the entire RDF graph into memory and performs samplin
 * Requires sufficient memory to load the entire graph
 * Is recommended for most use cases unless memory constraints prevent it
 * DFS is mostly recommended, especially for large and/or dense graphs
+
+For complex shapes, the generator builds both forward and reverse adjacency lists and uses DFS-based subgraph matching to find instances of the specified query topology in the graph.
 
 ### Endpoint-Based Generation
 Endpoint-based generation queries a SPARQL endpoint to perform sampling. This approach:
