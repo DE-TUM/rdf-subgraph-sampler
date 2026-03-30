@@ -11,6 +11,8 @@ from typing import Dict, List, Tuple, Optional
 import requests
 from tqdm import tqdm
 
+from samplers.dedup import dedup_key
+
 P_EDGE = 1          # Prob. of instantiating a predicate
 P_NODE = 0.3          # Prob. of instantiating an intermediate node
 P_START_END = 0.3     # Prob. of instantiating start/end node (non-seed)
@@ -315,7 +317,8 @@ def get_queries(rdf_file: str,
                 enable_timing: bool = True,
                 p_edge: float = P_EDGE,
                 p_node: float = P_NODE,
-                p_start_end: float = P_START_END) -> List[dict]:
+                p_start_end: float = P_START_END,
+                dedup_method: str = "hash") -> List[dict]:
     """Generate *n_queries* random simple-path queries of exact length *n_triples*.
     
     Args:
@@ -386,7 +389,8 @@ def get_queries(rdf_file: str,
                         nodes, preds = sp
                         where_clause, entities = _build_query_from_path(nodes, preds, p_edge=p_edge, p_node=p_node, p_start_end=p_start_end)
                         query_str = f"SELECT * WHERE {{ {where_clause} }}"
-                        hash_key = hash(where_clause) # simpler hashing for paths since the path is ordered and variable naming always the same
+                        triple_list = [t.split() for t in where_clause.split(" . ")]
+                        hash_key = dedup_key(triple_list, dedup_method)
 
                         if hash_key not in seen_hashes:
                             seen_hashes.add(hash_key)
@@ -395,8 +399,6 @@ def get_queries(rdf_file: str,
                             y = -1
                             if endpoint_url and get_cardinality:
                                 y = _get_cardinality(endpoint_url, where_clause)
-
-                            triple_list = [t.split() for t in where_clause.split(" . ")]
                             generated.append({
                                 "x": entities,
                                 "y": y,
@@ -463,7 +465,8 @@ def get_queries(rdf_file: str,
                 nodes, preds = sp
                 where_clause, entities = _build_query_from_path(nodes, preds, p_edge=p_edge, p_node=p_node, p_start_end=p_start_end)
                 query_str = f"SELECT * WHERE {{ {where_clause} }}"
-                hash_key = hash(where_clause)
+                triple_list = [t.split() for t in where_clause.split(" . ")]
+                hash_key = dedup_key(triple_list, dedup_method)
                 if hash_key in seen_hashes:
                     consecutive_failures += 1
                     if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
@@ -477,8 +480,6 @@ def get_queries(rdf_file: str,
                 y = -1
                 if endpoint_url and get_cardinality:
                     y = _get_cardinality(endpoint_url, where_clause)
-
-                triple_list = [t.split() for t in where_clause.split(" . ")]
                 generated.append({
                     "x": entities,
                     "y": y,

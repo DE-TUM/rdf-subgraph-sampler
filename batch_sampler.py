@@ -29,14 +29,15 @@ def run_sampler_for_config(size, queries, config):
         if config['IN_MEMORY']:
             print("Using In Memory star generation...")
             file_sampler_in_memory.get_queries(
-                None, dataset_name, size, queries, config['ENDPOINT'], 
-                use_cache=config['USE_CACHE'], 
+                None, dataset_name, size, queries, config['ENDPOINT'],
+                use_cache=config['USE_CACHE'],
                 min_objects_instantiated=min_objects_instantiated,
                 max_objects_instantiated=max_objects_instantiated,
-                rdf_file=config['RDF_FILE_PATH'], 
-                p_predicate=config['P_PREDICATE'], 
+                rdf_file=config['RDF_FILE_PATH'],
+                p_predicate=config['P_PREDICATE'],
                 get_cardinality=config['GET_CARDINALITY'],
-                graph_name=config['GRAPH_NAME']
+                graph_name=config['GRAPH_NAME'],
+                dedup_method=config['DEDUP_METHOD']
             )
         else:
             print("Using endpoint-based star generation...")
@@ -57,7 +58,8 @@ def run_sampler_for_config(size, queries, config):
                 enable_timing=False,
                 p_edge=config['P_EDGE'],
                 p_node=config['P_NODE'],
-                p_start_end=config['P_START_END']
+                p_start_end=config['P_START_END'],
+                dedup_method=config['DEDUP_METHOD']
             )
         else:
             print("Using endpoint-based path generation...")
@@ -76,7 +78,8 @@ def run_sampler_for_config(size, queries, config):
                 use_cache=config['USE_CACHE'],
                 p_edge=config['P_EDGE'],
                 p_node=config['P_NODE'],
-                graph_name=config['GRAPH_NAME']
+                graph_name=config['GRAPH_NAME'],
+                dedup_method=config['DEDUP_METHOD']
             )
         else:
             raise ValueError("Complex shape generation requires IN_MEMORY=True")
@@ -109,7 +112,8 @@ if __name__ == "__main__":
         'P_NODE': P_NODE,
         'P_START_END': P_START_END,
         'GRAPH_NAME': GRAPH_NAME,
-        'QUERY_SHAPE': globals().get('QUERY_SHAPE', None)
+        'QUERY_SHAPE': globals().get('QUERY_SHAPE', None),
+        'DEDUP_METHOD': globals().get('DEDUP_METHOD', 'hash')
     }
 
     print(f"Starting batch generation for {len(QUERY_CONFIGURATIONS)} configurations...")

@@ -59,6 +59,8 @@ P_START_END = 0.3  # Probability of instantiating start/end node (non-seed) in p
 
 # Complex-specific configuration
 QUERY_SHAPE = None  # Shape string, e.g. "?a B ?b, ?b B ?c, ?c B ?a"
+
+DEDUP_METHOD = "hash"  # Deduplication: "hash" (fast, multiset) or "wl" (precise, isomorphism)
 ```
 
 ### `batch_sampler_config.py`
@@ -93,6 +95,8 @@ P_START_END = 0.3  # Probability of instantiating start/end node
 # Complex-specific configuration
 QUERY_SHAPE = "?r B ?a, ?r B ?b, ?a B ?c, ?a B ?d, ?b B ?e, ?b B ?f"  # Binary tree
 
+DEDUP_METHOD = "hash"  # Deduplication: "hash" (fast, multiset) or "wl" (precise, isomorphism)
+
 # ====== BATCH CONFIGURATION ======
 # Specify multiple query sizes and how many queries to generate for each size
 # Format: [(size, number_of_queries), (size, number_of_queries), ...]
@@ -116,6 +120,13 @@ QUERY_CONFIGURATIONS = [
 * `IN_MEMORY`: Whether to use in-memory generation instead of SPARQL endpoint queries (default: True)
 * `RDF_FILE_PATH`: Path to the RDF file for in-memory generation (required when `IN_MEMORY=True`)
 * `GET_CARDINALITY`: Whether to compute cardinality for generated queries if in-memory(default: True)
+
+### Deduplication
+* `DEDUP_METHOD`: Method used to detect duplicate query patterns during generation - `"hash"` or `"wl"` (default: `"hash"`)
+  * **`"hash"`** — Hashes the sorted multiset of `(predicate, bound_object_or_?)` pairs. Very fast (~2 µs/query). Ignores join structure, so it may reject queries that have the same predicate/object multiset but different variable connectivity. This means it is **stricter** than necessary: it never keeps duplicates, but may discard some unique queries. Accurate for star queries (where the multiset fully determines the structure).
+  * **`"wl"`** — Computes a canonical form using Weisfeiler-Leman color refinement with individualize-and-refine. Still fast (~60 µs/query) but ~30x slower than hash. Respects the full join structure, so two queries are marked as duplicates only if they are truly isomorphic (identical up to variable renaming). Accurate for any query shape (stars, paths, cycles, diamonds, trees, etc.).
+
+  For star queries both methods are equivalent. For paths and complex shapes, `"wl"` will typically retain more unique queries (e.g., ~12% more on path queries in our tests). Use `"hash"` when speed is critical and a small loss of unique queries is acceptable; use `"wl"` when maximizing the number of unique query patterns matters.
 
 ### Star-Specific Parameters
 * `MIN_OBJECTS_INSTANTIATED`: Minimum number of objects to keep instantiated (default: 0)

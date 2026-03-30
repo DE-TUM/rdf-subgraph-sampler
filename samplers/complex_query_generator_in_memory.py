@@ -32,6 +32,8 @@ from typing import Dict, List, Tuple, Optional, Set
 import requests
 from tqdm import tqdm
 
+from samplers.dedup import dedup_key as _dedup_key
+
 P_EDGE = 1.0
 P_NODE = 0.3
 SAVE_INTERVAL = 300
@@ -368,7 +370,8 @@ def get_queries(rdf_file,
                 p_edge=P_EDGE,
                 p_node=P_NODE,
                 graph_name=None,
-                output_file=None):
+                output_file=None,
+                dedup_method="hash"):
     """Generate *n_queries* unique queries matching *query_shape*.
 
     Args:
@@ -468,7 +471,8 @@ def get_queries(rdf_file,
                 _build_query(template, node_assign, pred_assign, p_edge, p_node, graph_name)
 
             # --- dedup ---
-            h = _hash_query(template, pred_assign, bp, bn)
+            triple_list = [p.split() for p in patterns]
+            h = _dedup_key(triple_list, dedup_method)
             if h in seen_hashes:
                 consecutive_failures += 1
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
@@ -487,7 +491,7 @@ def get_queries(rdf_file,
 
             generated.append({
                 "query": query_str,
-                "triples": [p.split() for p in patterns],
+                "triples": triple_list,
                 "x": entities,
                 "y": y,
             })

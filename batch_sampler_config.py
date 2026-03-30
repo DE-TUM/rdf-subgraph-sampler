@@ -2,13 +2,13 @@
 
 # General configuration
 ENDPOINT = "http://localhost:7001"  # URL of the SPARQL endpoint where the KG is hosted (required)
-SHAPE = "complex"  # Shape of subgraphs to generate: "path", "star", "complex", "flower", "snowflake"
-DATASET = "wn18rr_v4"  # Dataset name (used for output file)
+SHAPE = "path"  # Shape of subgraphs to generate: "path", "star", "complex"
+DATASET = "fb237_v4"  # Dataset name (used for output file)
 USE_CACHE = True  # Whether to use cached search structures for in memory generation
 IN_MEMORY = True  # Whether to use in-memory search and generation instead of sparql endpoint
 GRAPH_NAME = None # The named graph name used for querying the endpoint
 
-RDF_FILE_PATH = "/home/tim/fully-inductive-cardinality-estimation/data/wn18rr_v4/raw/59622641"  # Path to RDF file to use
+RDF_FILE_PATH = "/home/tim/fully-inductive-cardinality-estimation/data/fb237_v4/raw/fb237_v4.nt"  # Path to RDF file to use
 
 GET_CARDINALITY = True  # Whether to compute cardinality for generated queries in-memory
 
@@ -72,7 +72,9 @@ GET_CARDINALITY = True  # Whether to compute cardinality for generated queries i
 #             /         \
 #   ?l3 <--- ?c          ?d ---> ?r3
 #   ?l4 <--- ?c          ?d ---> ?r4
-QUERY_SHAPE = "?center B ?a, ?center B ?b, ?center B ?c, ?center B ?d, ?a B ?l1, ?a B ?l2, ?b B ?r1, ?b B ?r2"
+#QUERY_SHAPE = "?center B ?a, ?center B ?b, ?center B ?c, ?center B ?d, ?a B ?l1, ?a B ?l2, ?b B ?r1, ?b B ?r2"
+
+DEDUP_METHOD = "wl"  # Deduplication method: "hash" (fast, multiset-based) or "wl" (precise, isomorphism-based)
 
 P_PREDICATE = 1.0  # Probability of instantiating predicates (1.0 = always instantiate, 0.0 = never instantiate)
 
@@ -86,6 +88,9 @@ P_START_END = 0.3  # Probability of instantiating start/end node (non-seed) in p
 # Specify multiple query sizes and how many queries to generate for each size
 # Format: [(size, number_of_queries), (size, number_of_queries), ...]
 QUERY_CONFIGURATIONS = [
-    (5, 100),    # size is ignored for complex shape (derived from QUERY_SHAPE), just set n_queries
+    (4, 1000),
+    (5, 1000),
+    (6, 1000),
+    (7, 1000),
 ] 
 

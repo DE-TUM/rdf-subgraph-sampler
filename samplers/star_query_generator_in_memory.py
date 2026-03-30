@@ -12,6 +12,7 @@ import random
 import requests
 import hashlib
 import time
+from samplers.dedup import dedup_key
 from collections import Counter, defaultdict
 from datetime import datetime
 import os
@@ -317,10 +318,10 @@ def generate_star_query(star_data, n_triples, prob_predicate=1.0, min_objects_in
     # If we couldn't generate a unique query after max_object_combinations attempts
     return None
 
-def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000, 
-                endpoint_url=None, subjects=[], get_cardinality=False, 
+def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
+                endpoint_url=None, subjects=[], get_cardinality=False,
                 outfile=True, use_cache=True, rdf_file=None, min_objects_instantiated=0, max_objects_instantiated=0,
-                p_predicate=1.0, graph_name=None):
+                p_predicate=1.0, graph_name=None, dedup_method="hash"):
     
     if not os.path.exists(rdf_file):
         print(f"Error: RDF file {rdf_file} not found")
@@ -368,7 +369,7 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
     random.shuffle(available_stars)
     star_index = 0
 
-    MAX_RESHUFFLES = 30
+    MAX_RESHUFFLES = 300
     MIN_NEW_QUERIES_PER_PASS = 5  # stop if a full pass yields fewer than this many new queries
     # Adaptive safety net: scales with star count so large datasets aren't killed prematurely
     MAX_CONSECUTIVE_FAILURES = max(500, len(available_stars) // 10)
@@ -422,7 +423,7 @@ def get_queries(graphfile, dataset_name, n_triples=10, n_queries=1000,
                                            max_objects_instantiated, endpoint_url, get_cardinality, graph_name=graph_name)
 
             if query_data:
-                query_hash = query_data['query_hash']
+                query_hash = dedup_key(query_data['triples'], dedup_method)
 
                 # Check if we've already seen this query pattern
                 if query_hash in seen_query_hashes:
