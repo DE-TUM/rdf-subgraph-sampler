@@ -3,12 +3,12 @@
 # General configuration
 ENDPOINT = "http://localhost:7001"  # URL of the SPARQL endpoint where the KG is hosted (required)
 SHAPE = "path"  # Shape of subgraphs to generate: "path", "star", "flower", "snowflake"
-DATASET = "swdf"  # Dataset name (used for output file)
+DATASET = ""  # Dataset name (used for output file)
 USE_CACHE = True  # Whether to use cached search structures for in memory generation
 IN_MEMORY = True  # Whether to use in-memory search and generation instead of sparql endpoint
 GRAPH_NAME = None # The named graph name used for querying the endpoint
 
-RDF_FILE_PATH = "/home/tim/fully-inductive-cardinality-estimation/data/swdf/raw/59320634"  # Path to RDF file to use
+RDF_FILE_PATH = ""  # Path to RDF file to use
 
 GET_CARDINALITY = True  # Whether to compute cardinality for generated queries in-memory
 

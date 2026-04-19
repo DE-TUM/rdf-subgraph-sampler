@@ -101,8 +101,8 @@ def combine_query_files(pattern="*_stars_*.json", output_file=None):
 
 if __name__ == "__main__":
     # Default pattern matches all star query files
-    pattern = "/home/tim/rdf-subgraph-sampler/fb237_v4_ind_SIZE_*_path_*.json"
-    output_file = "fb237_v4_ind_path_queries.json"
+    pattern = ""
+    output_file = ""
     
     # Simple command line argument handling
     if len(sys.argv) > 1:

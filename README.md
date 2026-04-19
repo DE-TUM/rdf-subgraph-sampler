@@ -1,12 +1,27 @@
-# rdf-subgraph-sampler 
+# rdf-subgraph-sampler
+
+### Sampling Subgraph Templates and Cardinalities from RDF Knowledge Graphs
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+
+
+
 Sampling approach to obtain conjunctive queries from RDF knowledge graphs and their cardinality. The tool supports both endpoint-based and in-memory generation methods for extracting star, path, and arbitrary complex query patterns.
 
-## Preparation 
+**Maintainer:** Tim Schwabe — Technical University of Munich
+(*[Data Engineering Group](https://www.cs.cit.tum.de/cde/homepage/)*, led by Prof. Maribel Acosta)
+
+Contact: `tim.schwabe@tum.de` (or open an issue).
+
+## Installation 
 * Clone the repository
 * Install the required Python libraries: `tqdm` and `requests`
 * For endpoint-based generation: Load the RDF knowledge graph in a SPARQL endpoint
 * For in-memory generation: Have your RDF file available locally (supports .nt format) (but you also need to load it if you want to calculate cardinalities)
-* We recommend using in-memory generation whenever feasible, it is sgnificantly faster
+* We recommend using in-memory generation whenever feasible, it is significantly faster
 
 ## Usage 
 
@@ -225,3 +240,25 @@ Generated queries are saved to files in the current directory with names followi
 
 When cardinality computation is enabled, results include both the query patterns and their cardinalities. 
 
+## Citation
+
+If you use this software in your research, please cite it as:
+
+> Schwabe, T., & Acosta, M. (2026). *rdf-subgraph-sampler: Sampling Subgraph Templates
+> and Cardinalities from RDF Knowledge Graphs* (Version 1.0.0) [Software].
+> Zenodo. https://doi.org/10.5281/zenodo.XXXXXXX
+
+**BibTeX:**
+
+```bibtex
+@software{schwabe_rdf_subgraph_sampler_2026,
+  author    = {Schwabe, Tim and Acosta, Maribel},
+  title     = {{rdf-subgraph-sampler}: Sampling Subgraph Templates
+               and Cardinalities from RDF Knowledge Graphs},
+  year      = {2026},
+  version   = {1.0.0},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.XXXXXXX},
+  url       = {https://github.com/DE-TUM/rdf-subgraph-sampler}
+}
+```

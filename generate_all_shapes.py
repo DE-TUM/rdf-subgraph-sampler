@@ -4,9 +4,9 @@
 from samplers import complex_query_generator_in_memory as gen
 
 # --- Configuration ---
-RDF_FILE = "/home/tim/fully-inductive-cardinality-estimation/data/codex_l/raw/codex_l.nt"
+RDF_FILE = ""
 ENDPOINT = "http://localhost:7001"
-DATASET = "codexl"
+DATASET = ""
 N_QUERIES = 5000
 GET_CARDINALITY = True
 USE_CACHE = True
