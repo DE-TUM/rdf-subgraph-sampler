@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "rdf-subgraph-sampler: Sampling Subgraph Templates and Cardinalities from RDF Knowledge Graphs"
+type: software
+authors:
+  - family-names: Schwabe
+    given-names: Tim
+    orcid: "https://orcid.org/0009-0009-7957-603X"
+    affiliation: "Technical University of Munich"
+  - family-names: Acosta
+    given-names: Maribel
+    orcid: "https://orcid.org/0000-0002-1209-2868"
+    affiliation: "Technical University of Munich"
+version: 1.0.0
+date-released: "2026-04-19"
+license: Apache-2.0
+repository-code: "https://github.com/DE-TUM/rdf-subgraph-sampler"
+doi: "10.5281/zenodo.XXXXXXX"
+keywords:
+  - RDF
+  - SPARQL
+  - knowledge graphs
+  - subgraph sampling
+  - cardinality estimation
+  - BGP
