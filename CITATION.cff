@@ -15,7 +15,7 @@ version: 1.0.0
 date-released: "2026-04-19"
 license: Apache-2.0
 repository-code: "https://github.com/DE-TUM/rdf-subgraph-sampler"
-doi: "10.5281/zenodo.XXXXXXX"
+doi: "10.5281/zenodo.19729262"
 keywords:
   - RDF
   - SPARQL
