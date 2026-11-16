@@ -1,0 +1,524 @@
+#include "bgpgen/cardinality.hpp"
+#include "bgpgen/graph.hpp"
+#include "bgpgen/gz_reader.hpp"
+#include "bgpgen/json_writer.hpp"
+#include "bgpgen/nt_parser.hpp"
+#include "bgpgen/sampler_complex.hpp"
+#include "bgpgen/sampler_star.hpp"
+#include "bgpgen/subject_index.hpp"
+#include "bgpgen/template.hpp"
+#include "bgpgen/term_table.hpp"
+
+#include <chrono>
+#include <cstdio>
+#include <ctime>
+#include <fstream>
+#include <iostream>
+#include <random>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr const char* kUsage = R"(bgpgen - fast BGP query sampler with in-memory cardinalities
+
+Usage: bgpgen --data graph.nt[.gz] --shape SHAPE --size N [options]
+
+  --data FILE             N-Triples data graph (.nt or .nt.gz)
+  --shape SHAPE           star | path | complex (omit to just load & print stats)
+  --size N                query size; repeatable for batch runs (one output per size)
+  --template "..."        complex shape template, e.g. "?r B ?a, ?r B ?b" (complex only)
+  --num N                 queries per size (default 1000)
+  --seed N                RNG seed (default 42)
+  --p-edge P              prob. a path/complex predicate is bound (default 1.0)
+  --p-node P              prob. a Prob-marked template node is bound (default 0.0)
+  --p-start-end P         prob. a path endpoint is bound (default 0.3)
+  --p-predicate P         prob. a star predicate is bound (default 1.0)
+  --min-objects-instantiated N   star: min bound objects (default 0)
+  --max-objects-instantiated N   star: max bound objects (default ceil(size/2))
+  --dedup METHOD          symmetry (default) | wl | hash. symmetry gives the same
+                          result as wl and is much faster for path/complex
+  --no-cardinality        skip the in-memory COUNT(*) pass (y = -1)
+  --card-budget N         max enumeration steps per count (default 50000000)
+  --prune                 path/complex: skip start nodes and neighbours that cannot
+                          complete the template (match counts over its spanning tree)
+                          from the start. Default: switched on during the run once
+                          failed attempts have cost as much as computing the counts
+  --no-auto-prune         never switch pruning on during the run
+  --attempt-budget N      path/complex, dfs: give up on a start node after looking at
+                          N neighbour candidates (default 0 = no limit)
+  --no-degree-check       path/complex: also try graph nodes with fewer different
+                          neighbours than their template node needs (no match
+                          can use them; default: skip them)
+  --sampling MODE         path/complex: dfs (default) | weighted. weighted draws the
+                          root ~ count^alpha and neighbours ~ count, no backtracking
+  --root-alpha A          weighted: 1 = every match equally likely (default),
+                          0 = every feasible root equally likely
+  --no-early-checks       complex: check cycle-closing edges in BFS order (default:
+                          as early as possible)
+  --shared-seed           seed every size with --seed itself (default: a seed
+                          derived from --seed and the size)
+  --v1-compat             the three switches above and --no-degree-check: same
+                          output as the first C++ version for the same seed
+  --dataset NAME          dataset name for output files (default: data file stem)
+  --output-dir DIR        output directory (default .)
+  -j, --threads N         worker threads (default: all cores)
+      --timing            print per-phase timings to stderr
+  -h, --help              show this help
+
+Output: {DATASET}_{SHAPE}_{timestamp}_{SIZE}.json with records
+{"query": "SELECT * WHERE {...}", "triples": [[s,p,o],...], "x": [...], "y": N}
+)";
+
+struct Options {
+  std::string data;
+  std::string shape;
+  std::vector<unsigned> sizes;
+  std::string template_str;
+  size_t num = 1000;
+  uint64_t seed = 42;
+  double p_edge = 1.0;
+  double p_node = 0.0;
+  double p_start_end = 0.3;
+  double p_predicate = 1.0;
+  int min_objects = 0;
+  int max_objects = -1; // -1 = ceil(size/2)
+  std::string dedup = "symmetry";
+  bool cardinality = true;
+  uint64_t card_budget = 50'000'000;
+  std::string dataset;
+  std::string output_dir = ".";
+  unsigned threads = 0;
+  bool timing = false;
+  bool prune = false;
+  bool auto_prune = true;
+  uint64_t attempt_budget = 0;
+  bool degree_check = true;
+  std::string sampling = "dfs";
+  double root_alpha = 1.0;
+  bool early_checks = true;
+  bool independent_sizes = true;
+};
+
+/// splitmix64 over (seed, size): unrelated streams for different sizes.
+uint64_t derive_seed(uint64_t seed, unsigned size) {
+  uint64_t z = seed + 0x9E3779B97F4A7C15ull * (static_cast<uint64_t>(size) + 1);
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+  return z ^ (z >> 31);
+}
+
+Options parse_args(int argc, char** argv) {
+  Options opt;
+  auto value = [&](int& i, const char* flag) -> std::string {
+    if (i + 1 >= argc) throw bgpgen::BgpError(std::string(flag) + " needs a value");
+    return argv[++i];
+  };
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--data") opt.data = value(i, "--data");
+    else if (arg == "--shape") opt.shape = value(i, "--shape");
+    else if (arg == "--size")
+      opt.sizes.push_back(static_cast<unsigned>(std::stoul(value(i, "--size"))));
+    else if (arg == "--template") opt.template_str = value(i, "--template");
+    else if (arg == "--num") opt.num = std::stoul(value(i, "--num"));
+    else if (arg == "--seed") opt.seed = std::stoull(value(i, "--seed"));
+    else if (arg == "--p-edge") opt.p_edge = std::stod(value(i, "--p-edge"));
+    else if (arg == "--p-node") opt.p_node = std::stod(value(i, "--p-node"));
+    else if (arg == "--p-start-end") opt.p_start_end = std::stod(value(i, "--p-start-end"));
+    else if (arg == "--p-predicate") opt.p_predicate = std::stod(value(i, "--p-predicate"));
+    else if (arg == "--min-objects-instantiated")
+      opt.min_objects = std::stoi(value(i, "--min-objects-instantiated"));
+    else if (arg == "--max-objects-instantiated")
+      opt.max_objects = std::stoi(value(i, "--max-objects-instantiated"));
+    else if (arg == "--dedup") opt.dedup = value(i, "--dedup");
+    else if (arg == "--no-cardinality") opt.cardinality = false;
+    else if (arg == "--card-budget") opt.card_budget = std::stoull(value(i, "--card-budget"));
+    else if (arg == "--dataset") opt.dataset = value(i, "--dataset");
+    else if (arg == "--output-dir") opt.output_dir = value(i, "--output-dir");
+    else if (arg == "-j" || arg == "--threads")
+      opt.threads = static_cast<unsigned>(std::stoul(value(i, "--threads")));
+    else if (arg == "--timing") opt.timing = true;
+    else if (arg == "--prune") opt.prune = true;
+    else if (arg == "--sampling") opt.sampling = value(i, "--sampling");
+    else if (arg == "--root-alpha") opt.root_alpha = std::stod(value(i, "--root-alpha"));
+    else if (arg == "--no-auto-prune") opt.auto_prune = false;
+    else if (arg == "--attempt-budget")
+      opt.attempt_budget = std::stoull(value(i, "--attempt-budget"));
+    else if (arg == "--no-degree-check") opt.degree_check = false;
+    else if (arg == "--no-early-checks") opt.early_checks = false;
+    else if (arg == "--shared-seed") opt.independent_sizes = false;
+    else if (arg == "--v1-compat") {
+      opt.auto_prune = false;
+      opt.early_checks = false;
+      opt.independent_sizes = false;
+      opt.degree_check = false;
+    }
+    else if (arg == "-h" || arg == "--help") {
+      std::cout << kUsage;
+      std::exit(0);
+    } else {
+      throw bgpgen::BgpError("unknown argument '" + arg + "' (see --help)");
+    }
+  }
+  if (opt.data.empty()) throw bgpgen::BgpError("--data is required (see --help)");
+  if (!opt.shape.empty() && opt.shape != "star" && opt.shape != "path" && opt.shape != "complex")
+    throw bgpgen::BgpError("unknown shape '" + opt.shape + "'");
+  if (!opt.shape.empty() && opt.sizes.empty() && opt.shape != "complex")
+    throw bgpgen::BgpError("--shape needs at least one --size");
+  if (opt.sampling != "dfs" && opt.sampling != "weighted")
+    throw bgpgen::BgpError("unknown sampling mode '" + opt.sampling + "'");
+  if (opt.dedup != "wl" && opt.dedup != "hash" && opt.dedup != "symmetry")
+    throw bgpgen::BgpError("unknown dedup method '" + opt.dedup + "'");
+  return opt;
+}
+
+struct PhaseTimer {
+  bool enabled;
+  std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+
+  void lap(const char* phase) {
+    auto now = std::chrono::steady_clock::now();
+    if (enabled) {
+      auto ms = std::chrono::duration<double, std::milli>(now - last).count();
+      std::fprintf(stderr, "%-10s %8.1f ms\n", phase, ms);
+    }
+    last = now;
+  }
+};
+
+/// "path/to/lubm-1.nt.gz" -> "lubm-1"
+std::string data_stem(const std::string& path) {
+  size_t slash = path.find_last_of('/');
+  std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+  for (const char* ext : {".gz", ".nt"}) {
+    size_t n = std::strlen(ext);
+    if (name.size() > n && name.compare(name.size() - n, n, ext) == 0)
+      name.resize(name.size() - n);
+  }
+  return name;
+}
+
+std::string timestamp_now() {
+  std::time_t t = std::time(nullptr);
+  std::tm tm{};
+  localtime_r(&t, &tm);
+  char buf[32];
+  std::strftime(buf, sizeof buf, "%Y-%m-%d_%H-%M-%S", &tm);
+  return buf;
+}
+
+std::string hex16(uint64_t v) {
+  char buf[17];
+  std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(v));
+  return buf;
+}
+
+void write_star_json(const std::string& path, const std::vector<bgpgen::StarRecord>& records,
+                     const bgpgen::TermTable& terms) {
+  using namespace bgpgen;
+  std::ofstream f(path);
+  if (!f) throw BgpError("cannot write '" + path + "'");
+  JsonWriter jw(f);
+  jw.begin_array();
+  for (const StarRecord& r : records) {
+    const Query& q = r.query;
+    jw.begin_object();
+    jw.key("query");
+    jw.string(render_sparql(q, terms));
+    jw.key("triples");
+    jw.begin_array();
+    for (const TriplePattern& tp : q.patterns) {
+      jw.begin_array();
+      jw.string(q_token(q, terms, tp.s));
+      jw.string(q_token(q, terms, tp.p));
+      jw.string(q_token(q, terms, tp.o));
+      jw.end_array();
+    }
+    jw.end_array();
+    jw.key("x");
+    jw.begin_array();
+    for (TermId t : q.x) jw.string(terms.lexical(t));
+    jw.end_array();
+    jw.key("y");
+    jw.number(q.y);
+    jw.key("source_subject");
+    jw.string(terms.lexical(r.meta.source_subject));
+    jw.key("star_size");
+    jw.number(r.meta.star_size);
+    jw.key("query_hash");
+    jw.string(hex16(r.meta.query_hash));
+    jw.key("predicates_used");
+    jw.begin_array();
+    for (TermId t : r.meta.predicates_used) jw.string(terms.lexical(t));
+    jw.end_array();
+    jw.key("instantiated_objects");
+    jw.begin_array();
+    for (TermId t : r.meta.instantiated_objects) jw.string(term_token(terms, t));
+    jw.end_array();
+    jw.key("object_instantiation_pattern");
+    jw.begin_array();
+    for (uint32_t i : r.meta.object_instantiation_pattern) jw.number(i);
+    jw.end_array();
+    jw.key("n_objects_instantiated");
+    jw.number(r.meta.n_objects_instantiated);
+    jw.end_object();
+  }
+  jw.end_array();
+}
+
+/// Plain {query,triples,x,y} records; complex uses that key order, path
+/// uses (x, y, query, triples) — both matching their Python generators.
+void write_query_json(const std::string& path, const std::vector<bgpgen::Query>& records,
+                      const bgpgen::TermTable& terms, bool path_order) {
+  using namespace bgpgen;
+  std::ofstream f(path);
+  if (!f) throw BgpError("cannot write '" + path + "'");
+  JsonWriter jw(f);
+  jw.begin_array();
+  for (const Query& q : records) {
+    jw.begin_object();
+    auto write_x_y = [&] {
+      jw.key("x");
+      jw.begin_array();
+      for (TermId t : q.x) jw.string(terms.lexical(t));
+      jw.end_array();
+      jw.key("y");
+      jw.number(q.y);
+    };
+    auto write_query_triples = [&] {
+      jw.key("query");
+      jw.string(render_sparql(q, terms));
+      jw.key("triples");
+      jw.begin_array();
+      for (const TriplePattern& tp : q.patterns) {
+        jw.begin_array();
+        jw.string(q_token(q, terms, tp.s));
+        jw.string(q_token(q, terms, tp.p));
+        jw.string(q_token(q, terms, tp.o));
+        jw.end_array();
+      }
+      jw.end_array();
+    };
+    if (path_order) {
+      write_x_y();
+      write_query_triples();
+    } else {
+      write_query_triples();
+      write_x_y();
+    }
+    jw.end_object();
+  }
+  jw.end_array();
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  using namespace bgpgen;
+  try {
+    Options opt = parse_args(argc, argv);
+    PhaseTimer timer{opt.timing};
+
+    TermTable terms;
+    std::vector<Triple> triples;
+    if (is_gz_path(opt.data)) {
+      std::vector<char> buf = read_gz_file(opt.data);
+      timer.lap("gunzip");
+      triples = parse_nt_buffer(buf.data(), buf.size(), terms, 0, opt.threads);
+    } else {
+      triples = load_nt_file(opt.data, terms, 0, opt.threads);
+    }
+    timer.lap("parse");
+
+    std::vector<Triple>* sets[] = {&triples};
+    terms.freeze(sets);
+    size_t parsed = triples.size();
+    TripleStore store;
+    store.build(std::move(triples), opt.threads);
+    timer.lap("index");
+
+    std::fprintf(stderr, "%zu triples (%zu distinct), %zu predicates, %zu terms "
+                         "(%zu iris, %u bnodes, %zu literals)\n",
+                 parsed, store.triple_count(), store.predicate_count(), terms.size(),
+                 terms.iri_count(), terms.literal_base() - terms.bnode_base(),
+                 terms.size() - terms.literal_base());
+
+    if (opt.shape.empty()) return 0;
+
+    std::string dataset = opt.dataset.empty() ? data_stem(opt.data) : opt.dataset;
+    std::string ts = timestamp_now();
+    DedupMethod method = opt.dedup == "wl"     ? DedupMethod::Wl
+                         : opt.dedup == "hash" ? DedupMethod::Hash
+                                               : DedupMethod::Symmetry;
+
+    if (opt.shape == "star") {
+      SubjectIndex sindex, rindex;
+      sindex.build(store, terms.bnode_base());
+      if (opt.cardinality) rindex.build(store, terms.bnode_base(), /*reverse=*/true);
+      timer.lap("subj-index");
+
+      for (unsigned size : opt.sizes) {
+        StarOptions so;
+        so.size = size;
+        so.num = opt.num;
+        so.p_predicate = opt.p_predicate;
+        // Python clamps: 0 <= min,max <= size; swap if min > max; default
+        // max = ceil(size/2).
+        unsigned min_o = std::min<unsigned>(static_cast<unsigned>(std::max(opt.min_objects, 0)),
+                                            size);
+        unsigned max_o = opt.max_objects < 0 ? (size + 1) / 2
+                                             : std::min(static_cast<unsigned>(opt.max_objects),
+                                                        size);
+        if (min_o > max_o) std::swap(min_o, max_o);
+        so.min_objects = min_o;
+        so.max_objects = max_o;
+
+        Dedup dedup(method);
+        std::mt19937_64 rng(opt.independent_sizes ? derive_seed(opt.seed, size) : opt.seed);
+        SampleReport rep;
+        std::vector<StarRecord> records = sample_stars(store, sindex, terms, so, dedup, rng, &rep);
+        timer.lap("sample");
+
+        if (opt.cardinality) {
+          std::vector<Query*> qs;
+          qs.reserve(records.size());
+          for (StarRecord& r : records) qs.push_back(&r.query);
+          count_cardinalities(store, sindex, rindex, qs, {opt.card_budget, opt.threads});
+          timer.lap("count");
+          size_t timeouts = 0;
+          for (const StarRecord& r : records) timeouts += r.query.y < 0;
+          if (timeouts)
+            std::fprintf(stderr, "size %u: %zu cardinalities hit the budget (y = -1)\n", size,
+                         timeouts);
+        }
+
+        std::string fn = opt.output_dir + "/" + dataset + "_stars_" + ts + "_" +
+                         std::to_string(size) + ".json";
+        write_star_json(fn, records, terms);
+        timer.lap("write");
+
+        std::fprintf(stderr, "size %u: %zu/%zu unique queries (%zu duplicates skipped, "
+                             "%zu reshuffles)%s%s -> %s\n",
+                     size, records.size(), opt.num, rep.duplicates_skipped, rep.reshuffles,
+                     rep.stop_reason.empty() ? "" : " - stopped: ",
+                     rep.stop_reason.c_str(), fn.c_str());
+      }
+      return 0;
+    }
+
+    // path / complex: DFS template matching on the IRI->IRI subgraph.
+    auto apply_match_options = [&](ComplexOptions& co) {
+      co.prune = opt.prune;
+      co.auto_prune = opt.auto_prune;
+      co.sampling = opt.sampling == "weighted" ? ComplexOptions::Sampling::Weighted
+                                               : ComplexOptions::Sampling::Dfs;
+      co.root_alpha = opt.root_alpha;
+      co.attempt_budget = opt.attempt_budget;
+      co.degree_check = opt.degree_check;
+    };
+    auto print_match_stats = [&](const SampleReport& rep) {
+      if (opt.timing)
+        std::fprintf(stderr, "  %zu attempts (%zu without a match, %zu of them given up), "
+                             "%llu candidates looked at, %zu start nodes skipped\n",
+                     rep.attempts, rep.failed_matches, rep.gave_up,
+                     static_cast<unsigned long long>(rep.expansions), rep.skipped_starts);
+      if (!opt.prune && opt.sampling != "weighted" && !rep.auto_pruned) return;
+      if (rep.auto_pruned) std::fprintf(stderr, "  pruning switched on during the run\n");
+      std::fprintf(stderr, "  %zu start nodes, %zu attempts (%zu without a match), "
+                           "%.3g spanning-tree matches, weights %.3f s\n",
+                   rep.start_candidates, rep.attempts, rep.failed_matches, rep.tree_matches,
+                   rep.weights_seconds);
+    };
+    SubjectIndex fwd, rev;
+    fwd.build(store, terms.bnode_base());
+    rev.build(store, terms.bnode_base(), /*reverse=*/true);
+    timer.lap("adj-index");
+
+    if (opt.shape == "complex") {
+      if (opt.template_str.empty())
+        throw BgpError("--shape complex needs --template (see --help)");
+      CompiledTemplate tmpl = parse_template(opt.template_str);
+      if (opt.early_checks) reorder_checks_early(tmpl);
+
+      ComplexOptions co;
+      co.num = opt.num;
+      co.p_edge = opt.p_edge;
+      co.p_node = opt.p_node;
+      apply_match_options(co);
+
+      Dedup dedup(method);
+      std::mt19937_64 rng(opt.seed);
+      SampleReport rep;
+      std::vector<Query> records =
+          sample_complex(store, fwd, rev, terms, tmpl, co, dedup, rng, &rep);
+      timer.lap("sample");
+
+      if (opt.cardinality) {
+        count_cardinalities(store, fwd, rev, records, {opt.card_budget, opt.threads});
+        timer.lap("count");
+        size_t timeouts = 0;
+        for (const Query& q : records) timeouts += q.y < 0;
+        if (timeouts)
+          std::fprintf(stderr, "complex: %zu cardinalities hit the budget (y = -1)\n", timeouts);
+      }
+
+      std::string fn = opt.output_dir + "/" + dataset + "_complex_" + ts + "_" +
+                       std::to_string(tmpl.triples.size()) + ".json";
+      write_query_json(fn, records, terms, /*path_order=*/false);
+      timer.lap("write");
+      std::fprintf(stderr, "complex: %zu/%zu unique queries (%zu duplicates skipped, "
+                           "%zu reshuffles)%s%s -> %s\n",
+                   records.size(), opt.num, rep.duplicates_skipped, rep.reshuffles,
+                   rep.stop_reason.empty() ? "" : " - stopped: ", rep.stop_reason.c_str(),
+                   fn.c_str());
+      print_match_stats(rep);
+      return 0;
+    }
+
+    // path: chain template, p_node carries p_start_end, Python path constants.
+    for (unsigned size : opt.sizes) {
+      CompiledTemplate tmpl = make_chain_template(size);
+
+      ComplexOptions co;
+      co.num = opt.num;
+      co.p_edge = opt.p_edge;
+      co.p_node = opt.p_start_end;
+      co.min_new_per_pass = 0;
+      co.max_consecutive = 200;
+      apply_match_options(co);
+
+      Dedup dedup(method);
+      std::mt19937_64 rng(opt.independent_sizes ? derive_seed(opt.seed, size) : opt.seed);
+      SampleReport rep;
+      std::vector<Query> records =
+          sample_complex(store, fwd, rev, terms, tmpl, co, dedup, rng, &rep);
+      timer.lap("sample");
+
+      if (opt.cardinality) {
+        count_cardinalities(store, fwd, rev, records, {opt.card_budget, opt.threads});
+        timer.lap("count");
+        size_t timeouts = 0;
+        for (const Query& q : records) timeouts += q.y < 0;
+        if (timeouts)
+          std::fprintf(stderr, "size %u: %zu cardinalities hit the budget (y = -1)\n", size,
+                       timeouts);
+      }
+
+      std::string fn = opt.output_dir + "/" + dataset + "_path_" + ts + "_" +
+                       std::to_string(size) + "_dfs.json";
+      write_query_json(fn, records, terms, /*path_order=*/true);
+      timer.lap("write");
+      std::fprintf(stderr, "size %u: %zu/%zu unique queries (%zu duplicates skipped, "
+                           "%zu reshuffles)%s%s -> %s\n",
+                   size, records.size(), opt.num, rep.duplicates_skipped, rep.reshuffles,
+                   rep.stop_reason.empty() ? "" : " - stopped: ", rep.stop_reason.c_str(),
+                   fn.c_str());
+      print_match_stats(rep);
+    }
+    return 0;
+  } catch (const std::exception& e) {
+    std::cerr << "bgpgen: " << e.what() << "\n";
+    return 2;
+  }
+}
