@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bgpgen/cardinality.hpp"
 #include "bgpgen/dedup.hpp"
 #include "bgpgen/query.hpp"
 #include "bgpgen/sampler_star.hpp" // SampleReport
@@ -43,6 +44,70 @@ struct ComplexOptions {
   /// is part of the match weights, so it also rules out nodes whose
   /// neighbours all fail it. Changes the order of random draws.
   bool degree_check = false;
+
+  /// DFS only: choose a predicate of the node first, then a neighbour under
+  /// it (see Matcher::set_predicate_first). `novelty` > 0 prefers predicates
+  /// that the queries emitted so far use less often at the same template edge.
+  bool pred_first = false;
+  double novelty = 0.0;
+
+  /// DFS only: a match that gives a query already in the workload does not
+  /// end the search on that start node; it goes on until it finds a new
+  /// query, runs out of candidates or reaches the attempt budget. Which
+  /// positions become constants is then drawn before the search.
+  bool skip_known = false;
+
+  /// With skip_known: end the search on a start node after it has met this
+  /// many known queries (0 = no limit other than the attempt budget). Near a
+  /// start node whose queries are mostly known, most further matches are
+  /// known too, and a fresh start node is the better try.
+  size_t max_known = 0;
+
+  /// With skip_known: how many new queries one visit of a start node may
+  /// give (the search goes on from the last match, so the later ones are
+  /// cheap, and they share most of their predicates with the first).
+  /// 0 = one in the first pass over the start nodes, twice as many in every
+  /// further pass (at most 64).
+  size_t per_seed = 1;
+
+  /// With skip_known: a start node that gave no new query in a pass is left
+  /// out of all later passes.
+  bool retire_seeds = false;
+
+  /// DFS only: order the start nodes so that nodes with different sets of
+  /// out-predicates come first (one node of every set, then a second one of
+  /// every set that has one, and so on; random inside). Without it the order
+  /// is uniformly random, so a set shared by many nodes is visited often.
+  bool seed_groups = false;
+
+  /// Cardinality targets: the workload gets the same number of queries in
+  /// each of `buckets` ranges of the result size, equally wide on a log
+  /// scale between 1 and `max_card`. Every new query is counted when it is
+  /// found and dropped if its range is full or it lies outside.
+  /// Implies skip_known. The search on a start node ends at the first query
+  /// that is known or dropped, unless max_known is set (then known and
+  /// dropped queries count together).
+  struct CardTargets {
+    unsigned buckets = 0;                // 0 = off
+    double max_card = 1e6;               // upper end of the last range (exclusive)
+    uint64_t count_budget = 2'000'000;   // enumeration steps per count; over = too large
+    /// Steer the predicate choice (implies pred_first): every range learns
+    /// an exponent g and chooses predicates with weight (triples with the
+    /// predicate)^g. A count above the aimed range lowers g, one below
+    /// raises it.
+    bool steer = true;
+    /// Stop after this many counted queries in a row that were dropped.
+    /// 0 = max(5000, 20 * num).
+    size_t max_dropped_in_a_row = 0;
+  };
+  CardTargets card;
+
+  /// DFS only: threads that search at the same time (implies skip_known).
+  /// The start nodes are handed out in rounds; inside a round a thread does
+  /// not see what the others find, and what two threads both find is kept
+  /// once. The workload is the same for the same seed and number of threads,
+  /// and differs between numbers of threads.
+  unsigned threads = 1;
 
   enum class Sampling {
     Dfs,     // shuffled start nodes, randomized DFS, first match wins

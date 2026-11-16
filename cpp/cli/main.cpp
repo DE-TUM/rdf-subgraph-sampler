@@ -9,6 +9,7 @@
 #include "bgpgen/template.hpp"
 #include "bgpgen/term_table.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -50,6 +51,33 @@ Usage: bgpgen --data graph.nt[.gz] --shape SHAPE --size N [options]
   --no-degree-check       path/complex: also try graph nodes with fewer different
                           neighbours than their template node needs (no match
                           can use them; default: skip them)
+  --pred-first            path/complex, dfs: choose a predicate of the node first, then
+                          a neighbour under it (default: choose among all edges of
+                          the node, so frequent predicates are chosen more often)
+  --novelty B             with --pred-first (implied): prefer predicates used less
+                          often so far at the same template edge, weight
+                          1/(1+uses)^B (default 0 = every predicate equally likely)
+  --skip-known            path/complex, dfs: when a match gives a query that is already
+                          in the workload, keep searching from the same start node
+  --max-known K           with --skip-known: give up on a start node after K matches
+                          with known queries (default 0 = no limit)
+  --per-seed K            with --skip-known: up to K new queries per visit of a start
+                          node (default 1). auto = 1 in the first pass over the start
+                          nodes, twice as many in every further pass
+  --retire-seeds          with --skip-known: a start node that gave no new query in a
+                          pass is left out of later passes
+  --seed-groups           path/complex, dfs: visit start nodes with different sets of
+                          out-predicates first (default: uniformly random order)
+  --card-buckets N        path/complex, dfs: the same number of queries in each of N
+                          ranges of the result size, equally wide on a log scale
+                          between 1 and --card-max. Counts every new query when it
+                          is found; implies --skip-known and --pred-first
+  --card-max X            upper end of the last range (default 1e6)
+  --no-card-steer         with --card-buckets: do not steer the predicate choice
+                          towards the ranges that still lack queries
+  --sample-threads N      path/complex, dfs: search with N threads (default 1; implies
+                          --skip-known). The workload is repeatable for the same
+                          seed and N, and differs between values of N
   --sampling MODE         path/complex: dfs (default) | weighted. weighted draws the
                           root ~ count^alpha and neighbours ~ count, no backtracking
   --root-alpha A          weighted: 1 = every match equally likely (default),
@@ -63,6 +91,7 @@ Usage: bgpgen --data graph.nt[.gz] --shape SHAPE --size N [options]
   --dataset NAME          dataset name for output files (default: data file stem)
   --output-dir DIR        output directory (default .)
   -j, --threads N         worker threads (default: all cores)
+      --no-output         do not write the output file (for timing runs)
       --timing            print per-phase timings to stderr
   -h, --help              show this help
 
@@ -90,10 +119,22 @@ struct Options {
   std::string output_dir = ".";
   unsigned threads = 0;
   bool timing = false;
+  bool write_output = true;
   bool prune = false;
   bool auto_prune = true;
   uint64_t attempt_budget = 0;
   bool degree_check = true;
+  bool pred_first = false;
+  double novelty = 0.0;
+  bool skip_known = false;
+  size_t per_seed = 1;
+  size_t max_known = 0;
+  bool retire_seeds = false;
+  bool seed_groups = false;
+  unsigned card_buckets = 0;
+  double card_max = 1e6;
+  bool card_steer = true;
+  unsigned sample_threads = 1;
   std::string sampling = "dfs";
   double root_alpha = 1.0;
   bool early_checks = true;
@@ -139,6 +180,7 @@ Options parse_args(int argc, char** argv) {
     else if (arg == "-j" || arg == "--threads")
       opt.threads = static_cast<unsigned>(std::stoul(value(i, "--threads")));
     else if (arg == "--timing") opt.timing = true;
+    else if (arg == "--no-output") opt.write_output = false;
     else if (arg == "--prune") opt.prune = true;
     else if (arg == "--sampling") opt.sampling = value(i, "--sampling");
     else if (arg == "--root-alpha") opt.root_alpha = std::stod(value(i, "--root-alpha"));
@@ -146,6 +188,25 @@ Options parse_args(int argc, char** argv) {
     else if (arg == "--attempt-budget")
       opt.attempt_budget = std::stoull(value(i, "--attempt-budget"));
     else if (arg == "--no-degree-check") opt.degree_check = false;
+    else if (arg == "--pred-first") opt.pred_first = true;
+    else if (arg == "--novelty") {
+      opt.novelty = std::stod(value(i, "--novelty"));
+      opt.pred_first = true;
+    }
+    else if (arg == "--skip-known") opt.skip_known = true;
+    else if (arg == "--per-seed") {
+      std::string v = value(i, "--per-seed");
+      opt.per_seed = v == "auto" ? 0 : std::stoul(v);
+    }
+    else if (arg == "--retire-seeds") opt.retire_seeds = true;
+    else if (arg == "--max-known") opt.max_known = std::stoul(value(i, "--max-known"));
+    else if (arg == "--seed-groups") opt.seed_groups = true;
+    else if (arg == "--card-buckets")
+      opt.card_buckets = static_cast<unsigned>(std::stoul(value(i, "--card-buckets")));
+    else if (arg == "--card-max") opt.card_max = std::stod(value(i, "--card-max"));
+    else if (arg == "--no-card-steer") opt.card_steer = false;
+    else if (arg == "--sample-threads")
+      opt.sample_threads = static_cast<unsigned>(std::stoul(value(i, "--sample-threads")));
     else if (arg == "--no-early-checks") opt.early_checks = false;
     else if (arg == "--shared-seed") opt.independent_sizes = false;
     else if (arg == "--v1-compat") {
@@ -416,13 +477,42 @@ int main(int argc, char** argv) {
       co.root_alpha = opt.root_alpha;
       co.attempt_budget = opt.attempt_budget;
       co.degree_check = opt.degree_check;
+      co.pred_first = opt.pred_first;
+      co.novelty = opt.novelty;
+      co.skip_known = opt.skip_known;
+      co.per_seed = opt.per_seed;
+      co.max_known = opt.max_known;
+      co.retire_seeds = opt.retire_seeds;
+      co.seed_groups = opt.seed_groups;
+      co.card.buckets = opt.card_buckets;
+      co.card.max_card = opt.card_max;
+      co.card.steer = opt.card_steer;
+      co.threads = opt.sample_threads;
+      if (opt.card_buckets && opt.card_max <= 1.0)
+        throw BgpError("--card-max must be above 1");
     };
-    auto print_match_stats = [&](const SampleReport& rep) {
-      if (opt.timing)
+    auto print_match_stats = [&](const SampleReport& rep, const std::vector<Query>& records) {
+      if (opt.timing) {
         std::fprintf(stderr, "  %zu attempts (%zu without a match, %zu of them given up), "
-                             "%llu candidates looked at, %zu start nodes skipped\n",
+                             "%llu candidates looked at, %zu start nodes skipped, "
+                             "%zu attempts with known queries only\n",
                      rep.attempts, rep.failed_matches, rep.gave_up,
-                     static_cast<unsigned long long>(rep.expansions), rep.skipped_starts);
+                     static_cast<unsigned long long>(rep.expansions), rep.skipped_starts,
+                     rep.known_only);
+        std::vector<TermId> preds;
+        for (const Query& q : records)
+          for (const TriplePattern& tp : q.patterns)
+            if (!q_is_var(tp.p)) preds.push_back(tp.p);
+        std::sort(preds.begin(), preds.end());
+        std::fprintf(stderr, "  %zu different predicates in the queries\n",
+                     static_cast<size_t>(std::unique(preds.begin(), preds.end()) - preds.begin()));
+      }
+      if (!rep.bucket_fill.empty()) {
+        std::fprintf(stderr, "  queries per range:");
+        for (size_t n : rep.bucket_fill) std::fprintf(stderr, " %zu", n);
+        std::fprintf(stderr, "; %zu counted in %.3f s, dropped: %zu range full, %zu outside\n",
+                     rep.counted, rep.count_seconds, rep.dropped_full, rep.dropped_outside);
+      }
       if (!opt.prune && opt.sampling != "weighted" && !rep.auto_pruned) return;
       if (rep.auto_pruned) std::fprintf(stderr, "  pruning switched on during the run\n");
       std::fprintf(stderr, "  %zu start nodes, %zu attempts (%zu without a match), "
@@ -454,7 +544,7 @@ int main(int argc, char** argv) {
           sample_complex(store, fwd, rev, terms, tmpl, co, dedup, rng, &rep);
       timer.lap("sample");
 
-      if (opt.cardinality) {
+      if (opt.cardinality && !opt.card_buckets) {
         count_cardinalities(store, fwd, rev, records, {opt.card_budget, opt.threads});
         timer.lap("count");
         size_t timeouts = 0;
@@ -465,14 +555,14 @@ int main(int argc, char** argv) {
 
       std::string fn = opt.output_dir + "/" + dataset + "_complex_" + ts + "_" +
                        std::to_string(tmpl.triples.size()) + ".json";
-      write_query_json(fn, records, terms, /*path_order=*/false);
+      if (opt.write_output) write_query_json(fn, records, terms, /*path_order=*/false);
       timer.lap("write");
       std::fprintf(stderr, "complex: %zu/%zu unique queries (%zu duplicates skipped, "
                            "%zu reshuffles)%s%s -> %s\n",
                    records.size(), opt.num, rep.duplicates_skipped, rep.reshuffles,
                    rep.stop_reason.empty() ? "" : " - stopped: ", rep.stop_reason.c_str(),
                    fn.c_str());
-      print_match_stats(rep);
+      print_match_stats(rep, records);
       return 0;
     }
 
@@ -495,7 +585,7 @@ int main(int argc, char** argv) {
           sample_complex(store, fwd, rev, terms, tmpl, co, dedup, rng, &rep);
       timer.lap("sample");
 
-      if (opt.cardinality) {
+      if (opt.cardinality && !opt.card_buckets) {
         count_cardinalities(store, fwd, rev, records, {opt.card_budget, opt.threads});
         timer.lap("count");
         size_t timeouts = 0;
@@ -507,14 +597,14 @@ int main(int argc, char** argv) {
 
       std::string fn = opt.output_dir + "/" + dataset + "_path_" + ts + "_" +
                        std::to_string(size) + "_dfs.json";
-      write_query_json(fn, records, terms, /*path_order=*/true);
+      if (opt.write_output) write_query_json(fn, records, terms, /*path_order=*/true);
       timer.lap("write");
       std::fprintf(stderr, "size %u: %zu/%zu unique queries (%zu duplicates skipped, "
                            "%zu reshuffles)%s%s -> %s\n",
                    size, records.size(), opt.num, rep.duplicates_skipped, rep.reshuffles,
                    rep.stop_reason.empty() ? "" : " - stopped: ", rep.stop_reason.c_str(),
                    fn.c_str());
-      print_match_stats(rep);
+      print_match_stats(rep, records);
     }
     return 0;
   } catch (const std::exception& e) {

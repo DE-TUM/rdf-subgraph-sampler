@@ -159,6 +159,51 @@ first pass; with pruning the check is part of the counts, so it also rules
 out nodes whose neighbours all fail it. The order of random draws changes,
 so the output for a seed differs from a run with `--no-degree-check`.
 
+### Options that change which queries are sampled (all off by default)
+
+Each of these changes the workload for a seed. They can be combined.
+
+- `--pred-first`: at every step choose a predicate of the node, then a
+  neighbour under it. Without it one of the node's edges is chosen, so a
+  predicate is chosen in proportion to its edges.
+- `--novelty B` (implies `--pred-first`): choose a predicate with weight
+  1/(1 + uses)^B, where `uses` counts the queries emitted so far that have
+  the predicate at the same template edge. B = 1 is the tested value.
+- `--seed-groups`: visit start nodes with different sets of out-predicates
+  first (one node per set, then a second node per set, and so on). Without
+  it the order is uniformly random, so a set shared by a million nodes is
+  visited a million times as often as a rare one. Costs one sort of the
+  start nodes per pass.
+- `--skip-known`: decide the constants of the query before the search, and
+  let the search go on when a match gives a query that is already known.
+  `--max-known K` ends the search on a start node after K known queries;
+  K = 1 gives up at the first one, as without the option.
+- `--per-seed K|auto` (with `--skip-known`): take up to K new queries from
+  one visit of a start node. `auto` takes one in the first pass over the
+  start nodes and twice as many in every further pass, so a workload that
+  one pass can fill is not affected.
+- `--retire-seeds` (with `--skip-known`): a start node that gave no new
+  query in a pass is left out of later passes.
+- `--card-buckets N --card-max X`: the same number of queries in each of N
+  ranges of the result size, equally wide on a log scale between 1 and X.
+  Every new query is counted when it is found and dropped if its range is
+  full; the search on that start node then ends (the queries near a dropped
+  one mostly fall into the same range), unless `--max-known` is set.
+  Implies `--skip-known`, and `--pred-first` when steering is on. The count
+  uses a budget of 2,000,000 steps; a query over it counts as too large.
+  The predicate choice is steered towards the ranges that still lack
+  queries (`--no-card-steer` to disable): each range learns an exponent g
+  and chooses predicates with weight (triples with the predicate)^g.
+- `--sample-threads N`: search with N threads. The start nodes are handed
+  out in rounds; inside a round a thread does not see what the others find.
+  The workload is the same for the same seed and N, and differs between
+  values of N.
+
+For bulk sampling the tested combination is
+`--novelty 1 --skip-known --max-known 1 --per-seed auto --retire-seeds`.
+Searching on after known queries without `--max-known` made bulk sampling
+several times slower.
+
 `bench/` holds the experiment drivers for these options
 (`eval_improvements.cpp`, `analyze_improvements.py`, `steering_grid.sh`,
 `analyze_steering.py`).

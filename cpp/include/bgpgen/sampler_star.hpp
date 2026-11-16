@@ -42,7 +42,8 @@ struct SampleReport {
   // Filled by sample_complex only (path / complex shapes).
   size_t attempts = 0;          // start nodes tried
   size_t failed_matches = 0;    // attempts that found no match
-  size_t gave_up = 0;           // of those: stopped by the attempt budget
+  size_t gave_up = 0;           // attempts stopped by the attempt budget
+  size_t known_only = 0;        // skip_known: attempts that met known queries only
   uint64_t expansions = 0;      // neighbour candidates looked at
   size_t start_candidates = 0;  // size of the start set
   double tree_matches = 0.0;    // spanning-tree matches in the graph (with weights)
@@ -50,6 +51,13 @@ struct SampleReport {
   size_t skipped_starts = 0;    // start nodes ruled out by the degree check
   bool auto_pruned = false;     // auto_prune switched pruning on during the run
   std::vector<TermId> roots;    // root node of every emitted query, in order
+
+  // Cardinality targets (sample_complex).
+  std::vector<size_t> bucket_fill; // queries per range
+  size_t counted = 0;              // new queries counted
+  size_t dropped_full = 0;         // dropped: their range was full
+  size_t dropped_outside = 0;      // dropped: above max_card or over the count budget
+  double count_seconds = 0.0;      // time spent counting inside the sampling
 };
 
 /// Generates up to opt.num unique star queries. Loop semantics mirror the

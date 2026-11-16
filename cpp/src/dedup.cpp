@@ -284,30 +284,61 @@ bool Dedup::insert(const Query& q, const TermTable& terms) {
     if (!symmetry_key(q, key)) key = "W" + canonical_bgp_key(q.patterns);
     return canon_.insert(std::move(key)).second;
   }
-  if (method_ == DedupMethod::Hash) {
-    // Faithful port of _hash_dedup_key: one "pred=obj" part per pattern,
-    // tokens as they appear in the output triples (predicates keep their
-    // brackets / variable names), variable objects collapse to "?". Sorted,
-    // joined with "|", hashed. Subjects are ignored.
-    parts_.clear();
-    for (const TriplePattern& tp : q.patterns) {
-      std::string part = q_token(q, terms, tp.p);
-      part += '=';
-      if (q_is_var(tp.o))
-        part += '?';
-      else
-        part += term_token(terms, tp.o);
-      parts_.push_back(std::move(part));
-    }
-    std::sort(parts_.begin(), parts_.end());
-    std::string joined;
-    for (size_t i = 0; i < parts_.size(); ++i) {
-      if (i) joined += '|';
-      joined += parts_[i];
-    }
-    return hashes_.insert(hash_bytes(joined)).second;
-  }
+  if (method_ == DedupMethod::Hash) return hashes_.insert(hash_key(q, terms)).second;
   return canon_.insert(canonical_bgp_key(q.patterns)).second;
+}
+
+uint64_t Dedup::hash_key(const Query& q, const TermTable& terms) {
+  // Faithful port of _hash_dedup_key: one "pred=obj" part per pattern,
+  // tokens as they appear in the output triples (predicates keep their
+  // brackets / variable names), variable objects collapse to "?". Sorted,
+  // joined with "|", hashed. Subjects are ignored.
+  parts_.clear();
+  for (const TriplePattern& tp : q.patterns) {
+    std::string part = q_token(q, terms, tp.p);
+    part += '=';
+    if (q_is_var(tp.o))
+      part += '?';
+    else
+      part += term_token(terms, tp.o);
+    parts_.push_back(std::move(part));
+  }
+  std::sort(parts_.begin(), parts_.end());
+  std::string joined;
+  for (size_t i = 0; i < parts_.size(); ++i) {
+    if (i) joined += '|';
+    joined += parts_[i];
+  }
+  return hash_bytes(joined);
+}
+
+void Dedup::key(const Query& q, const TermTable& terms, std::string& out) {
+  if (method_ == DedupMethod::Symmetry) {
+    if (!symmetry_key(q, out)) out = "W" + canonical_bgp_key(q.patterns);
+  } else if (method_ == DedupMethod::Hash) {
+    uint64_t h = hash_key(q, terms);
+    out.assign(reinterpret_cast<const char*>(&h), sizeof h);
+  } else {
+    out = canonical_bgp_key(q.patterns);
+  }
+}
+
+namespace {
+uint64_t hash_of_key(const std::string& key) {
+  uint64_t h = 0;
+  std::memcpy(&h, key.data(), sizeof h);
+  return h;
+}
+} // namespace
+
+bool Dedup::contains(const std::string& key) const {
+  if (method_ == DedupMethod::Hash) return hashes_.count(hash_of_key(key)) != 0;
+  return canon_.count(key) != 0;
+}
+
+bool Dedup::insert_key(std::string key) {
+  if (method_ == DedupMethod::Hash) return hashes_.insert(hash_of_key(key)).second;
+  return canon_.insert(std::move(key)).second;
 }
 
 } // namespace bgpgen

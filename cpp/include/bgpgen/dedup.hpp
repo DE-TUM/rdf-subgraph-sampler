@@ -38,9 +38,19 @@ std::string canonical_bgp_key(const std::vector<TriplePattern>& patterns);
 class Dedup {
 public:
   explicit Dedup(DedupMethod method) : method_(method) {}
+  DedupMethod method() const { return method_; }
 
   /// True if the query is new (and remembers it).
   bool insert(const Query& q, const TermTable& terms);
+
+  /// The same test in two parts, for several threads that share one set:
+  /// key() writes the query's key (it uses this object's scratch space, so
+  /// every thread needs its own Dedup with the same method and template),
+  /// contains() and insert_key() test and extend the set of the object they
+  /// are called on. insert(q) == insert_key(key(q)).
+  void key(const Query& q, const TermTable& terms, std::string& out);
+  bool contains(const std::string& key) const;
+  bool insert_key(std::string key);
 
   /// "symmetry" only: the template of every query passed to insert() from
   /// now on. One template per Dedup; it must outlive the Dedup.
@@ -59,6 +69,7 @@ private:
   std::vector<std::string> parts_; // scratch
 
   bool symmetry_key(const Query& q, std::string& key);
+  uint64_t hash_key(const Query& q, const TermTable& terms);
   const CompiledTemplate* tmpl_ = nullptr;
   TemplateSymmetries symmetries_;                // no perms = use WL
   std::vector<uint8_t> order_;                   // scratch: edge at each position

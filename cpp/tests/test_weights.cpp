@@ -6,6 +6,7 @@
 #include "bgpgen/nt_parser.hpp"
 #include "bgpgen/sampler_complex.hpp"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -411,5 +412,183 @@ TEST_CASE("symmetry and wl give the same workload for the same seed") {
     }
     CHECK(!out[0].empty());
     CHECK(out[0] == out[1]);
+  }
+}
+
+TEST_CASE("predicate first chooses every predicate of a node equally often") {
+  // h has 99 edges with predicate p and one with predicate q.
+  std::string nt = edge("h", "q", "u");
+  for (int i = 0; i < 99; ++i) nt += edge("h", "p", "t" + std::to_string(i));
+  auto g = load(nt);
+  CompiledTemplate tmpl = parse_template("?r B ?a");
+  TermId h = g->terms.find_iri("http://h");
+  TermId q = g->terms.find_iri("http://q");
+  REQUIRE(h != kInvalidTerm);
+  REQUIRE(q != kInvalidTerm);
+  const PredIndex qi = g->store.pred_index(q);
+  const size_t n_preds = g->store.predicate_count();
+
+  auto share_of_q = [&](bool pred_first, double novelty, const uint32_t* uses) {
+    Matcher m(g->store, g->fwd, g->rev, tmpl, g->terms.bnode_base());
+    m.set_predicate_first(pred_first, novelty, uses, n_preds);
+    std::mt19937_64 rng(1);
+    int hits = 0;
+    for (int i = 0; i < 4000; ++i) {
+      REQUIRE(m.match(h, rng));
+      hits += m.pred_assign()[0] == q;
+      CHECK((m.pred_index_assign()[0] == qi) == (m.pred_assign()[0] == q));
+    }
+    return hits / 4000.0;
+  };
+  CHECK(share_of_q(false, 0.0, nullptr) < 0.03);
+  double uniform = share_of_q(true, 0.0, nullptr);
+  CHECK(uniform > 0.45);
+  CHECK(uniform < 0.55);
+
+  // novelty 1: weight 1 / (1 + uses). p used 9 times, q never: q gets 10/11.
+  std::vector<uint32_t> uses(n_preds, 9);
+  uses[qi] = 0;
+  double novel = share_of_q(true, 1.0, uses.data());
+  CHECK(novel > 0.87);
+  CHECK(novel < 0.95);
+}
+
+TEST_CASE("skip_known finds every query of a small graph and none twice") {
+  auto g = load(kGraph + edge("h", "p", "a") + edge("h", "q", "a") + edge("h", "p", "b") +
+                edge("k", "p", "m") + edge("k", "p", "n") + edge("m", "q", "k"));
+  struct Case {
+    const char* shape;
+    double p_node;
+  };
+  for (Case c : {Case{"?r B ?a, ?r B ?b", 0.0}, Case{"?r B ?a, ?a B ?b, ?z B ?r", 0.0},
+                 Case{"?r B ?a, ?r B ?b, ?b B ?c", 0.0}, Case{"?r/B B ?a, ?a B ?b/B", 1.0}}) {
+    CAPTURE(c.shape);
+    CompiledTemplate tmpl = parse_template(c.shape);
+    auto run = [&](uint64_t seed, bool skip_known, bool pred_first, double novelty,
+                   size_t per_seed = 1, bool retire = false, unsigned threads = 1) {
+      ComplexOptions co;
+      co.num = 1000;
+      co.p_node = c.p_node;
+      co.min_new_per_pass = 0;
+      co.skip_known = skip_known;
+      co.pred_first = pred_first;
+      co.novelty = novelty;
+      co.per_seed = per_seed;
+      co.retire_seeds = retire;
+      co.threads = threads;
+      Dedup dedup(DedupMethod::Symmetry);
+      std::mt19937_64 rng(seed);
+      auto qs = sample_complex(g->store, g->fwd, g->rev, g->terms, tmpl, co, dedup, rng);
+      std::vector<std::string> keys;
+      for (const Query& q : qs) {
+        CHECK(count_query(g->store, g->fwd, g->rev, q) >= 1);
+        keys.push_back(canonical_bgp_key(q.patterns));
+      }
+      std::sort(keys.begin(), keys.end());
+      CHECK(std::adjacent_find(keys.begin(), keys.end()) == keys.end());
+      return keys;
+    };
+    // The search from a start node is complete here (no budget, no node with
+    // more than 50 neighbours), so every seed ends with the same set.
+    std::vector<std::string> all = run(1, true, false, 0.0);
+    CHECK(!all.empty());
+    CHECK(run(2, true, false, 0.0) == all);
+    // Several queries per visit, and leaving out start nodes that gave no new
+    // query, lose nothing when the search is complete.
+    for (size_t per_seed : {size_t{0}, size_t{1}, size_t{4}})
+      for (bool retire : {false, true}) CHECK(run(3, true, false, 0.0, per_seed, retire) == all);
+    // Several threads find the same set, and the same workload for the same
+    // seed and number of threads.
+    for (unsigned threads : {2u, 3u, 8u}) {
+      CAPTURE(threads);
+      CHECK(run(4, true, false, 0.0, 1, false, threads) == all);
+      CHECK(run(4, true, true, 1.0, 0, true, threads) == run(4, true, true, 1.0, 0, true, threads));
+    }
+    for (uint64_t seed : {1, 2, 3}) {
+      std::vector<std::string> plain = run(seed, false, false, 0.0);
+      CHECK(std::includes(all.begin(), all.end(), plain.begin(), plain.end()));
+      for (double novelty : {0.0, 1.0}) {
+        std::vector<std::string> guided = run(seed, true, true, novelty);
+        CHECK(std::includes(all.begin(), all.end(), guided.begin(), guided.end()));
+        CHECK(guided.size() >= plain.size());
+      }
+    }
+  }
+}
+
+TEST_CASE("seed groups visit one start node of every predicate set first") {
+  // 60 nodes with out-predicate p, one node with out-predicate q.
+  std::string nt = edge("b", "q", "y");
+  for (int i = 0; i < 60; ++i) nt += edge("a" + std::to_string(i), "p", "x");
+  auto g = load(nt);
+  CompiledTemplate tmpl = parse_template("?r B ?a");
+  for (uint64_t seed : {1, 2, 3, 4, 5}) {
+    ComplexOptions co;
+    co.num = 2;
+    co.skip_known = true;
+    co.seed_groups = true;
+    Dedup dedup(DedupMethod::Symmetry);
+    std::mt19937_64 rng(seed);
+    SampleReport rep;
+    auto qs = sample_complex(g->store, g->fwd, g->rev, g->terms, tmpl, co, dedup, rng, &rep);
+    CHECK(qs.size() == 2);
+    CHECK(rep.attempts == 2); // one node of each of the two sets
+  }
+}
+
+TEST_CASE("cardinality targets fill every range with counted queries") {
+  // One predicate per result size: "?a B ?b" with predicate p<k> has k results.
+  std::string nt;
+  for (int k : {2, 5, 8, 20, 50, 80})
+    for (int i = 0; i < k; ++i)
+      nt += edge("s" + std::to_string(k) + "_" + std::to_string(i), "p" + std::to_string(k),
+                 "o" + std::to_string(i));
+  auto g = load(nt);
+  CompiledTemplate tmpl = parse_template("?a B ?b");
+  for (int variant = 0; variant < 4; ++variant) {
+    const bool steer = variant & 1;
+    CAPTURE(variant);
+    ComplexOptions co;
+    co.threads = variant & 2 ? 3 : 1;
+    co.card.buckets = 2;
+    co.card.max_card = 100; // ranges [1, 10) and [10, 100)
+    co.card.steer = steer;
+    {
+      co.num = 4;
+      Dedup dedup(DedupMethod::Symmetry);
+      std::mt19937_64 rng(1);
+      SampleReport rep;
+      auto qs = sample_complex(g->store, g->fwd, g->rev, g->terms, tmpl, co, dedup, rng, &rep);
+      REQUIRE(qs.size() == 4);
+      CHECK(rep.bucket_fill == std::vector<size_t>{2, 2});
+      for (const Query& q : qs) CHECK(q.y == count_query(g->store, g->fwd, g->rev, q));
+      CHECK(rep.stop_reason.empty());
+    }
+    {
+      co.num = 10; // five per range asked, three exist
+      co.min_new_per_pass = 0;
+      Dedup dedup(DedupMethod::Symmetry);
+      std::mt19937_64 rng(1);
+      SampleReport rep;
+      auto qs = sample_complex(g->store, g->fwd, g->rev, g->terms, tmpl, co, dedup, rng, &rep);
+      CHECK(qs.size() == 6);
+      CHECK(rep.bucket_fill == std::vector<size_t>{3, 3});
+      CHECK(!rep.stop_reason.empty());
+    }
+    {
+      co.num = 4;
+      co.card.max_card = 10; // one range would do; two ranges: [1, 3.16) and [3.16, 10)
+      Dedup dedup(DedupMethod::Symmetry);
+      std::mt19937_64 rng(1);
+      SampleReport rep;
+      auto qs = sample_complex(g->store, g->fwd, g->rev, g->terms, tmpl, co, dedup, rng, &rep);
+      CHECK(rep.bucket_fill == std::vector<size_t>{1, 2}); // 2 | 5, 8
+      // 20, 50, 80; threads of one round may each count and drop them.
+      if (co.threads == 1)
+        CHECK(rep.dropped_outside == 3);
+      else
+        CHECK(rep.dropped_outside >= 3);
+      for (const Query& q : qs) CHECK(q.y < 10);
+    }
   }
 }
