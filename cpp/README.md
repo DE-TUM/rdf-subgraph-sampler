@@ -64,8 +64,9 @@ output dir, thread count, `--timing`).
   of the query under these symmetries (interchangeable leaves are sorted,
   the remaining symmetries are tried one by one). Queries where this does
   not hold (a template node bound in one triple and variable in another),
-  templates with parallel edges or more than 720 remaining symmetries, and
-  the star sampler use the WL key. The WL test data
+  and templates with parallel edges or more than 720 remaining symmetries
+  use the WL key. The star sampler passes a star template to the key. The
+  WL test data
   (`test_canonicalization.py`) is ported in `tests/test_dedup.cpp`,
   plus an exhaustive check over *every* variable permutation of each
   shape.

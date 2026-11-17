@@ -435,7 +435,14 @@ int main(int argc, char** argv) {
         so.min_objects = min_o;
         so.max_objects = max_o;
 
+        // A star is a template too: with it the symmetry key applies and the
+        // slow WL form is not needed (same queries as --dedup wl).
+        std::string star_shape;
+        for (unsigned i = 0; i < size; ++i)
+          star_shape += (i ? ", ?s B ?o" : "?s B ?o") + std::to_string(i);
+        CompiledTemplate star_tmpl = parse_template(star_shape);
         Dedup dedup(method);
+        dedup.set_template(star_tmpl);
         std::mt19937_64 rng(opt.independent_sizes ? derive_seed(opt.seed, size) : opt.seed);
         SampleReport rep;
         std::vector<StarRecord> records = sample_stars(store, sindex, terms, so, dedup, rng, &rep);
