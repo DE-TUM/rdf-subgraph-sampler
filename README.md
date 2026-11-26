@@ -102,18 +102,18 @@ call it as `bgpgen` from anywhere. The rest of this README assumes that. If
 you downloaded the file with a browser on macOS, remove the download mark
 first: `xattr -d com.apple.quarantine bgpgen`.
 
-**Python package.** Wheels exist for Python 3.9 to 3.13. Download the wheel
-for your Python version and platform from the
-[release page](https://github.com/DE-TUM/rdf-subgraph-sampler/releases/latest)
-and install the file:
+**Python package.** Wheels exist for Python 3.9 to 3.13. This command picks
+the wheel for your Python version and platform from the release:
 
 ```sh
-pip install bgpgen-2.0.0-cp312-cp312-macosx_11_0_arm64.whl   # the file you downloaded
+pip install bgpgen --no-index --find-links https://github.com/DE-TUM/rdf-subgraph-sampler/releases/expanded_assets/v2.0.0
 ```
 
-In the file name, `cp312` stands for Python 3.12, and `manylinux` or
-`macosx` for the platform. The wheel contains the module `bgpgen` (see
-[Python bindings](#python-bindings)) and the command-line tool.
+The package is not on PyPI, hence `--no-index`. You can also download a
+wheel from the
+[release page](https://github.com/DE-TUM/rdf-subgraph-sampler/releases/latest)
+and run `pip install` on the file. The wheel contains the module `bgpgen`
+(see [Python bindings](#python-bindings)) and the command-line tool.
 
 ### Build from source
 
@@ -320,9 +320,8 @@ for record in workload:
 
 ## Python bindings
 
-Install the wheel from the release page (see [Installation](#installation)),
-or build the package from source with `pip install .`. It needs Python 3.9
-or newer.
+Install the prebuilt package (see [Installation](#installation)), or build it
+from source with `pip install .`. It needs Python 3.9 or newer.
 
 ```python
 import bgpgen
