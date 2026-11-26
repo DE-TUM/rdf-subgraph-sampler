@@ -1,0 +1,45 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "bgpgen"
+version = "2.0.0.dev0"
+description = "Samples SPARQL basic graph pattern queries with exact cardinalities from RDF knowledge graphs"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.9"
+authors = [{ name = "Tim Schwabe" }, { name = "Maribel Acosta" }]
+
+[project.urls]
+Repository = "https://github.com/DE-TUM/rdf-subgraph-sampler"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.20"
+cmake.source-dir = "cpp"
+wheel.packages = ["python/bgpgen"]
+install.strip = true
+build.targets = ["_bgpgen", "bgpgen"]
+
+[tool.scikit-build.cmake.define]
+BGPGEN_PYTHON = "ON"
+BGPGEN_NATIVE = "OFF"
+BGPGEN_TESTS = "OFF"
+
+# Prebuilt wheels, see .github/workflows/release.yml.
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+skip = "*musllinux*"
+manylinux-x86_64-image = "manylinux_2_28"
+test-requires = "pytest"
+# In the wheels, reading .nt.gz has to work: with the variable set, that test
+# fails instead of being skipped.
+test-command = "BGPGEN_REQUIRE_GZIP=1 pytest {project}/python/tests -q"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }

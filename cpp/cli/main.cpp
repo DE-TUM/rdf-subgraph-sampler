@@ -8,10 +8,13 @@
 #include "bgpgen/subject_index.hpp"
 #include "bgpgen/template.hpp"
 #include "bgpgen/term_table.hpp"
+#include "bgpgen/workload.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <iostream>
@@ -104,15 +107,7 @@ struct Options {
   std::string shape;
   std::vector<unsigned> sizes;
   std::string template_str;
-  size_t num = 1000;
-  uint64_t seed = 42;
-  double p_edge = 1.0;
-  double p_node = 0.0;
-  double p_start_end = 0.3;
-  double p_predicate = 1.0;
-  int min_objects = 0;
-  int max_objects = -1; // -1 = ceil(size/2)
-  std::string dedup = "symmetry";
+  bgpgen::WorkloadOptions w; // what to sample; shared with the Python module
   bool cardinality = true;
   uint64_t card_budget = 50'000'000;
   std::string dataset;
@@ -120,34 +115,7 @@ struct Options {
   unsigned threads = 0;
   bool timing = false;
   bool write_output = true;
-  bool prune = false;
-  bool auto_prune = true;
-  uint64_t attempt_budget = 0;
-  bool degree_check = true;
-  bool pred_first = false;
-  double novelty = 0.0;
-  bool skip_known = false;
-  size_t per_seed = 1;
-  size_t max_known = 0;
-  bool retire_seeds = false;
-  bool seed_groups = false;
-  unsigned card_buckets = 0;
-  double card_max = 1e6;
-  bool card_steer = true;
-  unsigned sample_threads = 1;
-  std::string sampling = "dfs";
-  double root_alpha = 1.0;
-  bool early_checks = true;
-  bool independent_sizes = true;
 };
-
-/// splitmix64 over (seed, size): unrelated streams for different sizes.
-uint64_t derive_seed(uint64_t seed, unsigned size) {
-  uint64_t z = seed + 0x9E3779B97F4A7C15ull * (static_cast<uint64_t>(size) + 1);
-  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-  z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-  return z ^ (z >> 31);
-}
 
 Options parse_args(int argc, char** argv) {
   Options opt;
@@ -162,17 +130,23 @@ Options parse_args(int argc, char** argv) {
     else if (arg == "--size")
       opt.sizes.push_back(static_cast<unsigned>(std::stoul(value(i, "--size"))));
     else if (arg == "--template") opt.template_str = value(i, "--template");
-    else if (arg == "--num") opt.num = std::stoul(value(i, "--num"));
-    else if (arg == "--seed") opt.seed = std::stoull(value(i, "--seed"));
-    else if (arg == "--p-edge") opt.p_edge = std::stod(value(i, "--p-edge"));
-    else if (arg == "--p-node") opt.p_node = std::stod(value(i, "--p-node"));
-    else if (arg == "--p-start-end") opt.p_start_end = std::stod(value(i, "--p-start-end"));
-    else if (arg == "--p-predicate") opt.p_predicate = std::stod(value(i, "--p-predicate"));
+    else if (arg == "--num") opt.w.num = std::stoul(value(i, "--num"));
+    else if (arg == "--seed") opt.w.seed = std::stoull(value(i, "--seed"));
+    else if (arg == "--p-edge") opt.w.p_edge = std::stod(value(i, "--p-edge"));
+    else if (arg == "--p-node") opt.w.p_node = std::stod(value(i, "--p-node"));
+    else if (arg == "--p-start-end") opt.w.p_start_end = std::stod(value(i, "--p-start-end"));
+    else if (arg == "--p-predicate") opt.w.p_predicate = std::stod(value(i, "--p-predicate"));
     else if (arg == "--min-objects-instantiated")
-      opt.min_objects = std::stoi(value(i, "--min-objects-instantiated"));
+      opt.w.min_objects = std::stoi(value(i, "--min-objects-instantiated"));
     else if (arg == "--max-objects-instantiated")
-      opt.max_objects = std::stoi(value(i, "--max-objects-instantiated"));
-    else if (arg == "--dedup") opt.dedup = value(i, "--dedup");
+      opt.w.max_objects = std::stoi(value(i, "--max-objects-instantiated"));
+    else if (arg == "--dedup") {
+      std::string v = value(i, "--dedup");
+      if (v == "symmetry") opt.w.dedup = bgpgen::DedupMethod::Symmetry;
+      else if (v == "wl") opt.w.dedup = bgpgen::DedupMethod::Wl;
+      else if (v == "hash") opt.w.dedup = bgpgen::DedupMethod::Hash;
+      else throw bgpgen::BgpError("unknown dedup method '" + v + "'");
+    }
     else if (arg == "--no-cardinality") opt.cardinality = false;
     else if (arg == "--card-budget") opt.card_budget = std::stoull(value(i, "--card-budget"));
     else if (arg == "--dataset") opt.dataset = value(i, "--dataset");
@@ -181,39 +155,44 @@ Options parse_args(int argc, char** argv) {
       opt.threads = static_cast<unsigned>(std::stoul(value(i, "--threads")));
     else if (arg == "--timing") opt.timing = true;
     else if (arg == "--no-output") opt.write_output = false;
-    else if (arg == "--prune") opt.prune = true;
-    else if (arg == "--sampling") opt.sampling = value(i, "--sampling");
-    else if (arg == "--root-alpha") opt.root_alpha = std::stod(value(i, "--root-alpha"));
-    else if (arg == "--no-auto-prune") opt.auto_prune = false;
-    else if (arg == "--attempt-budget")
-      opt.attempt_budget = std::stoull(value(i, "--attempt-budget"));
-    else if (arg == "--no-degree-check") opt.degree_check = false;
-    else if (arg == "--pred-first") opt.pred_first = true;
-    else if (arg == "--novelty") {
-      opt.novelty = std::stod(value(i, "--novelty"));
-      opt.pred_first = true;
+    else if (arg == "--prune") opt.w.prune = true;
+    else if (arg == "--sampling") {
+      std::string v = value(i, "--sampling");
+      if (v == "dfs") opt.w.sampling = bgpgen::ComplexOptions::Sampling::Dfs;
+      else if (v == "weighted") opt.w.sampling = bgpgen::ComplexOptions::Sampling::Weighted;
+      else throw bgpgen::BgpError("unknown sampling mode '" + v + "'");
     }
-    else if (arg == "--skip-known") opt.skip_known = true;
+    else if (arg == "--root-alpha") opt.w.root_alpha = std::stod(value(i, "--root-alpha"));
+    else if (arg == "--no-auto-prune") opt.w.auto_prune = false;
+    else if (arg == "--attempt-budget")
+      opt.w.attempt_budget = std::stoull(value(i, "--attempt-budget"));
+    else if (arg == "--no-degree-check") opt.w.degree_check = false;
+    else if (arg == "--pred-first") opt.w.pred_first = true;
+    else if (arg == "--novelty") {
+      opt.w.novelty = std::stod(value(i, "--novelty"));
+      opt.w.pred_first = true;
+    }
+    else if (arg == "--skip-known") opt.w.skip_known = true;
     else if (arg == "--per-seed") {
       std::string v = value(i, "--per-seed");
-      opt.per_seed = v == "auto" ? 0 : std::stoul(v);
+      opt.w.per_seed = v == "auto" ? 0 : std::stoul(v);
     }
-    else if (arg == "--retire-seeds") opt.retire_seeds = true;
-    else if (arg == "--max-known") opt.max_known = std::stoul(value(i, "--max-known"));
-    else if (arg == "--seed-groups") opt.seed_groups = true;
+    else if (arg == "--retire-seeds") opt.w.retire_seeds = true;
+    else if (arg == "--max-known") opt.w.max_known = std::stoul(value(i, "--max-known"));
+    else if (arg == "--seed-groups") opt.w.seed_groups = true;
     else if (arg == "--card-buckets")
-      opt.card_buckets = static_cast<unsigned>(std::stoul(value(i, "--card-buckets")));
-    else if (arg == "--card-max") opt.card_max = std::stod(value(i, "--card-max"));
-    else if (arg == "--no-card-steer") opt.card_steer = false;
+      opt.w.card_buckets = static_cast<unsigned>(std::stoul(value(i, "--card-buckets")));
+    else if (arg == "--card-max") opt.w.card_max = std::stod(value(i, "--card-max"));
+    else if (arg == "--no-card-steer") opt.w.card_steer = false;
     else if (arg == "--sample-threads")
-      opt.sample_threads = static_cast<unsigned>(std::stoul(value(i, "--sample-threads")));
-    else if (arg == "--no-early-checks") opt.early_checks = false;
-    else if (arg == "--shared-seed") opt.independent_sizes = false;
+      opt.w.sample_threads = static_cast<unsigned>(std::stoul(value(i, "--sample-threads")));
+    else if (arg == "--no-early-checks") opt.w.early_checks = false;
+    else if (arg == "--shared-seed") opt.w.independent_sizes = false;
     else if (arg == "--v1-compat") {
-      opt.auto_prune = false;
-      opt.early_checks = false;
-      opt.independent_sizes = false;
-      opt.degree_check = false;
+      opt.w.auto_prune = false;
+      opt.w.early_checks = false;
+      opt.w.independent_sizes = false;
+      opt.w.degree_check = false;
     }
     else if (arg == "-h" || arg == "--help") {
       std::cout << kUsage;
@@ -227,10 +206,6 @@ Options parse_args(int argc, char** argv) {
     throw bgpgen::BgpError("unknown shape '" + opt.shape + "'");
   if (!opt.shape.empty() && opt.sizes.empty() && opt.shape != "complex")
     throw bgpgen::BgpError("--shape needs at least one --size");
-  if (opt.sampling != "dfs" && opt.sampling != "weighted")
-    throw bgpgen::BgpError("unknown sampling mode '" + opt.sampling + "'");
-  if (opt.dedup != "wl" && opt.dedup != "hash" && opt.dedup != "symmetry")
-    throw bgpgen::BgpError("unknown dedup method '" + opt.dedup + "'");
   return opt;
 }
 
@@ -409,10 +384,6 @@ int main(int argc, char** argv) {
 
     std::string dataset = opt.dataset.empty() ? data_stem(opt.data) : opt.dataset;
     std::string ts = timestamp_now();
-    DedupMethod method = opt.dedup == "wl"     ? DedupMethod::Wl
-                         : opt.dedup == "hash" ? DedupMethod::Hash
-                                               : DedupMethod::Symmetry;
-
     if (opt.shape == "star") {
       SubjectIndex sindex, rindex;
       sindex.build(store, terms.bnode_base());
@@ -420,32 +391,9 @@ int main(int argc, char** argv) {
       timer.lap("subj-index");
 
       for (unsigned size : opt.sizes) {
-        StarOptions so;
-        so.size = size;
-        so.num = opt.num;
-        so.p_predicate = opt.p_predicate;
-        // Python clamps: 0 <= min,max <= size; swap if min > max; default
-        // max = ceil(size/2).
-        unsigned min_o = std::min<unsigned>(static_cast<unsigned>(std::max(opt.min_objects, 0)),
-                                            size);
-        unsigned max_o = opt.max_objects < 0 ? (size + 1) / 2
-                                             : std::min(static_cast<unsigned>(opt.max_objects),
-                                                        size);
-        if (min_o > max_o) std::swap(min_o, max_o);
-        so.min_objects = min_o;
-        so.max_objects = max_o;
-
-        // A star is a template too: with it the symmetry key applies and the
-        // slow WL form is not needed (same queries as --dedup wl).
-        std::string star_shape;
-        for (unsigned i = 0; i < size; ++i)
-          star_shape += (i ? ", ?s B ?o" : "?s B ?o") + std::to_string(i);
-        CompiledTemplate star_tmpl = parse_template(star_shape);
-        Dedup dedup(method);
-        dedup.set_template(star_tmpl);
-        std::mt19937_64 rng(opt.independent_sizes ? derive_seed(opt.seed, size) : opt.seed);
         SampleReport rep;
-        std::vector<StarRecord> records = sample_stars(store, sindex, terms, so, dedup, rng, &rep);
+        std::vector<StarRecord> records =
+            sample_star_workload(store, sindex, terms, size, opt.w, &rep);
         timer.lap("sample");
 
         if (opt.cardinality) {
@@ -468,7 +416,7 @@ int main(int argc, char** argv) {
 
         std::fprintf(stderr, "size %u: %zu/%zu unique queries (%zu duplicates skipped, "
                              "%zu reshuffles)%s%s -> %s\n",
-                     size, records.size(), opt.num, rep.duplicates_skipped, rep.reshuffles,
+                     size, records.size(), opt.w.num, rep.duplicates_skipped, rep.reshuffles,
                      rep.stop_reason.empty() ? "" : " - stopped: ",
                      rep.stop_reason.c_str(), fn.c_str());
       }
@@ -476,28 +424,6 @@ int main(int argc, char** argv) {
     }
 
     // path / complex: DFS template matching on the IRI->IRI subgraph.
-    auto apply_match_options = [&](ComplexOptions& co) {
-      co.prune = opt.prune;
-      co.auto_prune = opt.auto_prune;
-      co.sampling = opt.sampling == "weighted" ? ComplexOptions::Sampling::Weighted
-                                               : ComplexOptions::Sampling::Dfs;
-      co.root_alpha = opt.root_alpha;
-      co.attempt_budget = opt.attempt_budget;
-      co.degree_check = opt.degree_check;
-      co.pred_first = opt.pred_first;
-      co.novelty = opt.novelty;
-      co.skip_known = opt.skip_known;
-      co.per_seed = opt.per_seed;
-      co.max_known = opt.max_known;
-      co.retire_seeds = opt.retire_seeds;
-      co.seed_groups = opt.seed_groups;
-      co.card.buckets = opt.card_buckets;
-      co.card.max_card = opt.card_max;
-      co.card.steer = opt.card_steer;
-      co.threads = opt.sample_threads;
-      if (opt.card_buckets && opt.card_max <= 1.0)
-        throw BgpError("--card-max must be above 1");
-    };
     auto print_match_stats = [&](const SampleReport& rep, const std::vector<Query>& records) {
       if (opt.timing) {
         std::fprintf(stderr, "  %zu attempts (%zu without a match, %zu of them given up), "
@@ -520,7 +446,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "; %zu counted in %.3f s, dropped: %zu range full, %zu outside\n",
                      rep.counted, rep.count_seconds, rep.dropped_full, rep.dropped_outside);
       }
-      if (!opt.prune && opt.sampling != "weighted" && !rep.auto_pruned) return;
+      if (!opt.w.prune && opt.w.sampling != ComplexOptions::Sampling::Weighted && !rep.auto_pruned)
+        return;
       if (rep.auto_pruned) std::fprintf(stderr, "  pruning switched on during the run\n");
       std::fprintf(stderr, "  %zu start nodes, %zu attempts (%zu without a match), "
                            "%.3g spanning-tree matches, weights %.3f s\n",
@@ -535,23 +462,13 @@ int main(int argc, char** argv) {
     if (opt.shape == "complex") {
       if (opt.template_str.empty())
         throw BgpError("--shape complex needs --template (see --help)");
-      CompiledTemplate tmpl = parse_template(opt.template_str);
-      if (opt.early_checks) reorder_checks_early(tmpl);
-
-      ComplexOptions co;
-      co.num = opt.num;
-      co.p_edge = opt.p_edge;
-      co.p_node = opt.p_node;
-      apply_match_options(co);
-
-      Dedup dedup(method);
-      std::mt19937_64 rng(opt.seed);
+      size_t n_patterns = parse_template(opt.template_str).triples.size();
       SampleReport rep;
       std::vector<Query> records =
-          sample_complex(store, fwd, rev, terms, tmpl, co, dedup, rng, &rep);
+          sample_template_workload(store, fwd, rev, terms, opt.template_str, opt.w, &rep);
       timer.lap("sample");
 
-      if (opt.cardinality && !opt.card_buckets) {
+      if (opt.cardinality && !opt.w.card_buckets) {
         count_cardinalities(store, fwd, rev, records, {opt.card_budget, opt.threads});
         timer.lap("count");
         size_t timeouts = 0;
@@ -561,38 +478,26 @@ int main(int argc, char** argv) {
       }
 
       std::string fn = opt.output_dir + "/" + dataset + "_complex_" + ts + "_" +
-                       std::to_string(tmpl.triples.size()) + ".json";
+                       std::to_string(n_patterns) + ".json";
       if (opt.write_output) write_query_json(fn, records, terms, /*path_order=*/false);
       timer.lap("write");
       std::fprintf(stderr, "complex: %zu/%zu unique queries (%zu duplicates skipped, "
                            "%zu reshuffles)%s%s -> %s\n",
-                   records.size(), opt.num, rep.duplicates_skipped, rep.reshuffles,
+                   records.size(), opt.w.num, rep.duplicates_skipped, rep.reshuffles,
                    rep.stop_reason.empty() ? "" : " - stopped: ", rep.stop_reason.c_str(),
                    fn.c_str());
       print_match_stats(rep, records);
       return 0;
     }
 
-    // path: chain template, p_node carries p_start_end, Python path constants.
+    // path: a chain template (see sample_path_workload).
     for (unsigned size : opt.sizes) {
-      CompiledTemplate tmpl = make_chain_template(size);
-
-      ComplexOptions co;
-      co.num = opt.num;
-      co.p_edge = opt.p_edge;
-      co.p_node = opt.p_start_end;
-      co.min_new_per_pass = 0;
-      co.max_consecutive = 200;
-      apply_match_options(co);
-
-      Dedup dedup(method);
-      std::mt19937_64 rng(opt.independent_sizes ? derive_seed(opt.seed, size) : opt.seed);
       SampleReport rep;
       std::vector<Query> records =
-          sample_complex(store, fwd, rev, terms, tmpl, co, dedup, rng, &rep);
+          sample_path_workload(store, fwd, rev, terms, size, opt.w, &rep);
       timer.lap("sample");
 
-      if (opt.cardinality && !opt.card_buckets) {
+      if (opt.cardinality && !opt.w.card_buckets) {
         count_cardinalities(store, fwd, rev, records, {opt.card_budget, opt.threads});
         timer.lap("count");
         size_t timeouts = 0;
@@ -608,7 +513,7 @@ int main(int argc, char** argv) {
       timer.lap("write");
       std::fprintf(stderr, "size %u: %zu/%zu unique queries (%zu duplicates skipped, "
                            "%zu reshuffles)%s%s -> %s\n",
-                   size, records.size(), opt.num, rep.duplicates_skipped, rep.reshuffles,
+                   size, records.size(), opt.w.num, rep.duplicates_skipped, rep.reshuffles,
                    rep.stop_reason.empty() ? "" : " - stopped: ", rep.stop_reason.c_str(),
                    fn.c_str());
       print_match_stats(rep, records);

@@ -11,6 +11,12 @@ endif()
 
 option(BGPGEN_NATIVE "Optimize for the host CPU (-march=native)" ON)
 option(BGPGEN_TESTS "Build tests" ON)
+option(BGPGEN_PYTHON "Build the Python module (used by pip, see ../pyproject.toml)" OFF)
+
+if(BGPGEN_PYTHON)
+  # The static core is linked into a shared module.
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 find_package(ZLIB)
 
@@ -40,6 +46,7 @@ add_library(bgpgen_core STATIC
   src/matcher.cpp
   src/match_weights.cpp
   src/sampler_complex.cpp
+  src/workload.cpp
 )
 target_include_directories(bgpgen_core PUBLIC include)
 if(ZLIB_FOUND)
@@ -52,6 +59,19 @@ bgpgen_set_warnings(bgpgen_core)
 add_executable(bgpgen cli/main.cpp)
 target_link_libraries(bgpgen PRIVATE bgpgen_core)
 bgpgen_set_warnings(bgpgen)
+
+# --- Python module -------------------------------------------------------------
+if(BGPGEN_PYTHON)
+  find_package(Python 3.9 COMPONENTS Interpreter Development.Module REQUIRED)
+  find_package(nanobind CONFIG REQUIRED)
+  nanobind_add_module(_bgpgen NB_STATIC bindings/python/module.cpp)
+  target_link_libraries(_bgpgen PRIVATE bgpgen_core)
+  install(TARGETS _bgpgen LIBRARY DESTINATION bgpgen)
+  if(SKBUILD)
+    # pip also installs the command line tool.
+    install(TARGETS bgpgen RUNTIME DESTINATION ${SKBUILD_SCRIPTS_DIR})
+  endif()
+endif()
 
 # --- Evaluation driver for the sampling options (bench/) ---------------------
 add_executable(bgpgen_eval bench/eval_improvements.cpp)
