@@ -11,11 +11,11 @@ authors:
     given-names: Maribel
     orcid: "https://orcid.org/0000-0002-1209-2868"
     affiliation: "Technical University of Munich"
-version: 1.0.0
-date-released: "2026-04-19"
+version: 2.0.0
+date-released: "2026-11-26"
 license: Apache-2.0
 repository-code: "https://github.com/DE-TUM/rdf-subgraph-sampler"
-doi: "10.5281/zenodo.19729262"
+doi: "10.5281/zenodo.19729261"
 keywords:
   - RDF
   - SPARQL

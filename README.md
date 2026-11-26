@@ -447,15 +447,16 @@ If you use this software, please cite it:
   title     = {{rdf-subgraph-sampler}: Sampling Subgraph Templates
                and Cardinalities from RDF Knowledge Graphs},
   year      = {2026},
-  version   = {1.0.0},
+  version   = {2.0.0},
   publisher = {Zenodo},
-  doi       = {10.5281/zenodo.19729262},
+  doi       = {10.5281/zenodo.19729261},
   url       = {https://github.com/DE-TUM/rdf-subgraph-sampler}
 }
 ```
 
 The DOI [10.5281/zenodo.19729261](https://doi.org/10.5281/zenodo.19729261)
-always points to the latest release.
+stands for all versions and resolves to the latest one. Every release also
+has a DOI of its own on Zenodo.
 
 ## Maintenance and contact
 
