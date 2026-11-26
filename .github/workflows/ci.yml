@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, cpp-engine]
+  pull_request:
+
+jobs:
+  cpp:
+    name: C++ engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S cpp -B build -DBGPGEN_NATIVE=OFF
+      - name: Build
+        run: cmake --build build -j 4
+      - name: Unit tests
+        run: build/bgpgen_tests
+      - name: Run on the example graph
+        run: |
+          build/bgpgen --data examples/toy.nt --shape star --size 2 --num 5
+          build/bgpgen --data examples/toy.nt --shape path --size 2 --num 5
+          build/bgpgen --data examples/toy.nt --shape complex --template "?x B ?y, ?y B ?z, ?z B ?x"
+
+  bindings:
+    name: Python bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and install the package
+        run: pip install . pytest
+      - name: Test the bindings
+        run: pytest python/tests -q
+
+  python:
+    name: Python sampler of version 1, duplicate check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python test_canonicalization.py

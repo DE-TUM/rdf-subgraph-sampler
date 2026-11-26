@@ -216,6 +216,7 @@ include/bgpgen/, src/   core library (parser, term table, CSR store,
                         subject index, samplers, template engine, DFS
                         matcher, WL dedup, cardinality counter)
 cli/main.cpp            the bgpgen binary
+bindings/python/        the Python module (built by pip, see ../pyproject.toml)
 tests/                  doctest suite (load, star, template, dedup,
                         cardinality vs brute force)
 third_party/doctest     vendored test framework

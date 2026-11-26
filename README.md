@@ -1,255 +1,445 @@
-# rdf-subgraph-sampler
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/bgpgen-logo-dark.svg">
+    <img src="docs/logo/bgpgen-logo.svg" alt="BGPgen" width="360">
+  </picture>
+</p>
 
-### Sampling Subgraph Templates and Cardinalities from RDF Knowledge Graphs
+<p align="center">
+  <strong>Sample diverse SPARQL basic graph pattern queries with exact cardinalities from an RDF graph fast.</strong>
+</p>
 
-[![DOI](https://zenodo.org/badge/738566926.svg)](https://doi.org/10.5281/zenodo.19729261)
+<p align="center">
+  <img alt="C++20" src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white">
+  <img alt="Python 3.9 or newer" src="https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white">
+  <img alt="Platforms: Linux, macOS" src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-555555">
+  <a href="https://opensource.org/licenses/Apache-2.0"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-1D4ED8"></a>
+  <a href="https://doi.org/10.5281/zenodo.19729261"><img alt="DOI" src="https://zenodo.org/badge/738566926.svg"></a>
+</p>
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+BGPgen takes an RDF graph and a
+query shape and returns queries that have at least one result on that graph,
+each with its exact result size. The queries are basic graph patterns (BGPs):
+sets of triple patterns, as in the `WHERE` clause of a SPARQL query. Such
+workloads are used to train and to test cardinality estimators, query
+optimisers and knowledge graph embeddings.
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+The engine `bgpgen` is written in C++20 and needs no other library. It loads
+the graph into memory, so no SPARQL endpoint is needed. It comes as a
+command-line tool, a C++ library and a Python package.
 
+## Highlights
 
+- **Any connected shape.** Stars and paths by size, every other shape by a
+  template string such as `"?x B ?y, ?y B ?z, ?z B ?x"` (a triangle).
+- **Exact cardinalities.** Every query comes with its `COUNT(*)` on the
+  graph, computed in memory.
+- **No duplicates.** Two queries that differ only in the names of their
+  variables count as the same query. One of them is kept.
+- **Control over the workload.** Options spread the queries over the
+  predicates of the graph, or fill ranges of the result size evenly.
+- **Fast.** 1000 path queries with their cardinalities on a graph with 21
+  million triples take about 0.2 s after loading (see [Performance](#performance)).
+- **Repeatable.** The same seed gives the same workload (see
+  [Scope and limits](#scope-and-limits) for the one condition).
 
-Sampling approach to obtain conjunctive queries from RDF knowledge graphs and their cardinality. The tool supports both endpoint-based and in-memory generation methods for extracting star, path, and arbitrary complex query patterns.
+## Quick start
 
-**Maintainer:** Tim Schwabe — Technical University of Munich
-(*[Data Engineering Group](https://www.cs.cit.tum.de/cde/homepage/)*, led by Prof. Maribel Acosta)
+Download the command-line tool and the example graph, then sample triangle
+queries (on macOS with Apple Silicon use `bgpgen-macos-arm64`):
 
-Contact: `tim.schwabe@tum.de` (or open an issue).
+```sh
+curl -L -o bgpgen https://github.com/DE-TUM/rdf-subgraph-sampler/releases/latest/download/bgpgen-linux-x86_64
+chmod +x bgpgen
+curl -L -O https://raw.githubusercontent.com/DE-TUM/rdf-subgraph-sampler/main/examples/toy.nt
+./bgpgen --data toy.nt --shape complex --template "?x B ?y, ?y B ?z, ?z B ?x"
+```
 
-## Installation 
-* Clone the repository
-* Install the required Python libraries: `tqdm` and `requests`
-* For endpoint-based generation: Load the RDF knowledge graph in a SPARQL endpoint
-* For in-memory generation: Have your RDF file available locally (supports .nt format) (but you also need to load it if you want to calculate cardinalities)
-* We recommend using in-memory generation whenever feasible, it is significantly faster
+The last command prints what it did and writes a JSON file to the current
+folder:
 
-## Usage 
+```
+49 triples (49 distinct), 8 predicates, 30 terms (25 iris, 0 bnodes, 5 literals)
+complex: 2/1000 unique queries (8 duplicates skipped, 0 reshuffles) - stopped: diminishing returns (<5 new queries in a pass) -> ./toy_complex_2026-11-26_11-12-55_3.json
+```
 
-### Single Configuration Generation
-For generating queries with a single configuration:
+The toy graph has two different triangles, so the run ends with two queries.
+One of them:
 
-1. Create `sampler_config.py`
-2. Edit the configuration in `sampler_config.py` (see below)
-3. Run: `python sampler.py`
+```json
+{
+  "query": "SELECT * WHERE { ?x <http://example.org/worksFor> ?y . ?y <http://example.org/funded> ?z . ?z <http://example.org/author> ?x }",
+  "triples": [["?x", "<http://example.org/worksFor>", "?y"],
+              ["?y", "<http://example.org/funded>", "?z"],
+              ["?z", "<http://example.org/author>", "?x"]],
+  "x": ["http://example.org/worksFor", "http://example.org/funded", "http://example.org/author"],
+  "y": 6
+}
+```
 
-### Batch Generation
-For generating multiple query configurations in one run:
-1. Create `batch_sampler_config.py` 
-2. Edit the configuration in `batch_sampler_config.py` 
-3. Run: `python batch_sampler.py`
+## Installation
 
-## Configuration Files
+### Prebuilt files
 
-The tool uses separate configuration files to manage settings:
+Every [release](https://github.com/DE-TUM/rdf-subgraph-sampler/releases)
+comes with ready-made files for Linux (x86_64) and macOS (Apple Silicon).
+Nothing has to be compiled.
 
-### `sampler_config.py`
-Configuration file for single query generation (`sampler.py`). Contains all standard parameters including query size, number of queries, and sampling methods.
+**Command-line tool.** One file, no installation:
 
-**Example:**
+```sh
+# Linux
+curl -L -o bgpgen https://github.com/DE-TUM/rdf-subgraph-sampler/releases/latest/download/bgpgen-linux-x86_64
+# macOS
+curl -L -o bgpgen https://github.com/DE-TUM/rdf-subgraph-sampler/releases/latest/download/bgpgen-macos-arm64
+
+chmod +x bgpgen
+./bgpgen --help
+```
+
+Move the file to a folder on your `PATH` (for example `~/.local/bin`) to
+call it as `bgpgen` from anywhere. The rest of this README assumes that. If
+you downloaded the file with a browser on macOS, remove the download mark
+first: `xattr -d com.apple.quarantine bgpgen`.
+
+**Python package.** Wheels exist for Python 3.9 to 3.13. Download the wheel
+for your Python version and platform from the
+[release page](https://github.com/DE-TUM/rdf-subgraph-sampler/releases/latest)
+and install the file:
+
+```sh
+pip install bgpgen-2.0.0-cp312-cp312-macosx_11_0_arm64.whl   # the file you downloaded
+```
+
+In the file name, `cp312` stands for Python 3.12, and `manylinux` or
+`macosx` for the platform. The wheel contains the module `bgpgen` (see
+[Python bindings](#python-bindings)) and the command-line tool.
+
+### Build from source
+
+On other platforms, or to change the code, build it yourself. Requirements:
+a C++20 compiler and CMake 3.20 or newer. zlib is optional and adds support
+for `.nt.gz` input.
+
+```sh
+git clone https://github.com/DE-TUM/rdf-subgraph-sampler.git
+cd rdf-subgraph-sampler
+cmake -S cpp -B build          # Release build by default
+cmake --build build -j
+build/bgpgen_tests             # optional: run the test suite
+```
+
+The binary is `build/bgpgen`. The Python package is built with
+`pip install .` in the same folder.
+
+| Platform | Tested with |
+|---|---|
+| Linux | Ubuntu 24.04, GCC 13.3, CMake 3.28, Python 3.12 |
+| macOS | Apple clang 21, CMake 4.3, Python 3.9 and 3.12 |
+
+The build uses `-march=native` by default. Pass `-DBGPGEN_NATIVE=OFF` to
+`cmake` if the binary has to run on a different machine than the one that
+built it. The prebuilt files and `pip install .` are built without it; for
+the fastest Python package on your own machine use
+`pip install . -C cmake.define.BGPGEN_NATIVE=ON`. Windows is not supported.
+
+## Usage
+
+```
+bgpgen --data graph.nt[.gz] --shape star|path|complex [--size N] [--template "..."] [options]
+```
+
+`bgpgen --help` lists all options. Without `--shape` the tool loads the graph
+and prints its size.
+
+### Input
+
+The graph has to be in N-Triples (`.nt` or `.nt.gz`). Other formats can be
+converted first, for example with Apache Jena
+(`riot --output=nt data.ttl > data.nt`) or Raptor
+(`rapper -i turtle -o ntriples data.ttl > data.nt`).
+
+### Shapes
+
+| Shape | Command | Meaning |
+|---|---|---|
+| Star | `--shape star --size 4` | 4 triple patterns that share their subject |
+| Path | `--shape path --size 3` | a chain of 3 triple patterns |
+| Any other | `--shape complex --template "..."` | the shape given by the template |
+
+`--size` can be given several times (`--size 2 --size 3 --size 5`). The tool
+then writes one file per size.
+
+### Templates
+
+A template is a list of triple patterns, separated by commas. Each pattern
+has three parts: subject, predicate, object.
+
+| Position | Token | In the sampled query |
+|---|---|---|
+| Subject, object | `?x` | the variable `?x` |
+| | `x` | a constant: the term that the graph has at this place |
+| | `?x/B` | a constant with probability `--p-node`, else the variable `?x` |
+| Predicate | `B` | a constant: the predicate that the graph has at this place |
+| | `?` | a variable |
+| | `?/B` | a constant with probability `--p-edge`, else a variable |
+
+A name that occurs in two patterns stands for the same node, so shared names
+define the shape. Some examples:
+
+```sh
+# Triangle
+--template "?x B ?y, ?y B ?z, ?z B ?x"
+# Diamond
+--template "?a B ?b, ?a B ?c, ?b B ?d, ?c B ?d"
+# Tree: a root with two children, one grandchild below each
+--template "?p B ?a, ?p B ?b, ?a B ?c, ?b B ?d"
+# Path of two triple patterns; the start node is a constant in half of the queries
+--template "?x/B B ?y, ?y B ?z" --p-node 0.5
+```
+
+### The most used options
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--num N` | 1000 | number of queries per size |
+| `--seed N` | 42 | seed of the random number generator |
+| `--output-dir DIR` | `.` | folder for the output files (it has to exist) |
+| `--dataset NAME` | name of the data file | first part of the output file names |
+| `--no-cardinality` | off | do not count the results (`y` is then -1) |
+| `--card-budget N` | 50000000 | steps the counter may take per query; beyond that `y` is -1 |
+| `-j N` | all cores | threads for loading and counting |
+| `--timing` | off | print the time of every phase |
+
+The options that change which queries are sampled are described in the
+[tutorial](#tutorial) and, in full, in [cpp/README.md](cpp/README.md).
+
+### Output
+
+One JSON file per run and size, named
+`{dataset}_{stars|path|complex}_{timestamp}_{size}.json`
+(path files end in `_dfs.json`). It holds a list of records:
+
+| Key | Content |
+|---|---|
+| `query` | the query as a SPARQL string |
+| `triples` | the triple patterns as lists of three strings |
+| `x` | the constants of the query, without angle brackets |
+| `y` | the number of results (`COUNT(*)`), or -1 if it was not counted |
+
+Records of star queries have some more keys (`source_subject`, `star_size`,
+`predicates_used`, and others). The count `y` is the number a SPARQL endpoint
+returns for `SELECT (COUNT(*) AS ?c) WHERE { ... }` on the same graph.
+
+## Tutorial
+
+This walks from a graph file to a workload. The commands use the toy graph
+in [`examples/toy.nt`](examples/toy.nt) (49 triples about papers, authors and
+conferences). Replace it by your own `.nt` file. `bgpgen` is the tool from the
+[installation](#installation); after a build from source it is `build/bgpgen`.
+
+**1. Look at the graph.** Without a shape, the tool loads the graph and
+prints its size:
+
+```sh
+bgpgen --data examples/toy.nt
+```
+
+```
+49 triples (49 distinct), 8 predicates, 30 terms (25 iris, 0 bnodes, 5 literals)
+```
+
+**2. Sample stars and paths.**
+
+```sh
+mkdir -p workload
+bgpgen --data examples/toy.nt --shape star --size 2 --num 5 --output-dir workload
+bgpgen --data examples/toy.nt --shape path --size 2 --num 5 --output-dir workload
+```
+
+Each run reports how many queries it found and where it wrote them:
+
+```
+size 2: 5/5 unique queries (0 duplicates skipped, 0 reshuffles) -> workload/toy_stars_..._2.json
+```
+
+By default a star query has between 0 and half of its objects as constants,
+and a path query has its end nodes as constants with probability 0.3
+(`--p-start-end`).
+
+**3. Sample your own shape.** Write the shape as a template:
+
+```sh
+bgpgen --data examples/toy.nt --shape complex --output-dir workload \
+       --template "?paper B ?person, ?person B ?org, ?org B ?paper"
+```
+
+If the graph has fewer different queries of a shape than `--num`, the run
+stops by itself and says why (`stopped: ...`).
+
+**4. Large workloads.** On a large graph, these settings find new queries
+faster and spread them over more predicates:
+
+```sh
+bgpgen --data graph.nt --shape complex --num 5000 \
+       --template "?p B ?a, ?p B ?b, ?a B ?c, ?b B ?d" \
+       --attempt-budget 100 --novelty 1 --skip-known --max-known 1 \
+       --per-seed auto --retire-seeds
+```
+
+Add `--seed-groups` to visit start nodes with rare combinations of predicates
+as often as common ones.
+
+**5. A workload with small and large results.** Most sampled queries have few
+results. To get the same number of queries in each range of the result size:
+
+```sh
+bgpgen --data graph.nt --shape path --size 3 --num 1000 \
+       --card-buckets 5 --card-max 100000
+```
+
+This asks for 200 queries in each of 5 ranges between 1 and 100000 results,
+equally wide on a log scale. The tool reports how full each range got (here
+on a graph with 242,256 triples, where the last range has too few queries):
+
+```
+queries per range: 200 200 200 200 171; 3424 counted in 0.093 s, dropped: 2394 range full, 59 outside
+```
+
+**6. Read the workload.** The output is plain JSON (or use the [Python bindings](#python-bindings)):
+
 ```python
-# General configuration
-ENDPOINT = "http://localhost:8890/sparql"  # URL of the SPARQL endpoint where the KG is hosted (required)
-QUERIES = 10  # Maximum number of queries to generate
-SIZE = 3  # Number of triple patterns in the queries
-SHAPE = "path"  # Shape of subgraphs to generate: "path", "star", or "complex"
-DATASET = "LUBM_TEST"  # Dataset name (used for output file)
-USE_CACHE = True  # Whether to use cached search structures for in memory generation (created on first run for new rdf file)
-IN_MEMORY = True  # Whether to use in-memory search and generation instead of sparql endpoint
+import json
 
-RDF_FILE_PATH = "/../../..nt"  # Path to RDF file to use
+with open("workload/toy_path_2026-11-26_11-09-22_2_dfs.json") as f:
+    workload = json.load(f)
 
-GET_CARDINALITY = True  # Whether to compute cardinality for generated queries in-memory
-
-# Star-specific configuration
-# How many objects to keep instantiated - note: number is chosen uniformly at random between min and max
-MIN_OBJECTS_INSTANTIATED = 0  # Minimum number of objects to keep instantiated
-MAX_OBJECTS_INSTANTIATED = 5  # Maximum number of objects to keep instantiated
-P_PREDICATE = 1.0  # Probability of instantiating predicates (1.0 = always instantiate, 0.0 = never instantiate)
-
-# Path-specific configuration
-SAMPLING_METHOD = "dfs"  # Sampling method in-memory: "dfs", "bfs" or "random_walk"
-P_EDGE = 1.0  # Probability of instantiating a predicate in path queries (1.0 = always instantiate, 0.0 = never instantiate)
-P_NODE = 0.3  # Probability of instantiating an intermediate node in path queries
-P_START_END = 0.3  # Probability of instantiating start/end node (non-seed) in path queries
-
-# Complex-specific configuration
-QUERY_SHAPE = None  # Shape string, e.g. "?a B ?b, ?b B ?c, ?c B ?a"
-
-DEDUP_METHOD = "hash"  # Deduplication: "hash" (fast, multiset) or "wl" (precise, isomorphism)
+for record in workload:
+    print(record["y"], record["query"])
 ```
 
-### `batch_sampler_config.py`
-Configuration file for batch query generation (`batch_sampler.py`). Includes all standard parameters plus batch-specific configurations.
+## Python bindings
 
-**Example:**
+Install the wheel from the release page (see [Installation](#installation)),
+or build the package from source with `pip install .`. It needs Python 3.9
+or newer.
+
 ```python
-# Configuration file for batch_sampler.py
+import bgpgen
 
-# General configuration
-ENDPOINT = "http://localhost:8890/sparql"  # URL of the SPARQL endpoint where the KG is hosted (required)
-SHAPE = "complex"  # Shape of subgraphs to generate: "path", "star", or "complex"
-DATASET = "LUBM_TEST"  # Dataset name (used for output file)
-USE_CACHE = True  # Whether to use cached search structures for in memory generation
-IN_MEMORY = True  # Whether to use in-memory search and generation instead of sparql endpoint
+graph = bgpgen.Graph("examples/toy.nt")        # loads the graph once
+print(graph.triples, graph.predicates)         # 49 8
 
-RDF_FILE_PATH = "....nt"  # Path to RDF file to use
+queries = graph.sample("?x B ?y, ?y B ?z, ?z B ?x")   # any template
+paths = graph.sample_paths(3, num=1000, seed=7)
+stars = graph.sample_stars(4, num=1000)
 
-GET_CARDINALITY = True  # Whether to compute cardinality for generated queries in-memory
-
-# Star-specific configuration
-# NOTE: MIN_OBJECTS_INSTANTIATED and MAX_OBJECTS_INSTANTIATED are calculated dynamically
-# based on query size (min=0, max=ceil(0.5 * size)) in batch sampling
-P_PREDICATE = 1.0  # Probability of instantiating predicates
-
-# Path-specific configuration
-SAMPLING_METHOD = "dfs"  # Sampling method: "dfs", "bfs" or "random_walk"
-P_EDGE = 1.0  # Probability of instantiating a predicate
-P_NODE = 0.3  # Probability of instantiating an intermediate node
-P_START_END = 0.3  # Probability of instantiating start/end node
-
-# Complex-specific configuration
-QUERY_SHAPE = "?r B ?a, ?r B ?b, ?a B ?c, ?a B ?d, ?b B ?e, ?b B ?f"  # Binary tree
-
-DEDUP_METHOD = "hash"  # Deduplication: "hash" (fast, multiset) or "wl" (precise, isomorphism)
-
-# ====== BATCH CONFIGURATION ======
-# Specify multiple query sizes and how many queries to generate for each size
-# Format: [(size, number_of_queries), (size, number_of_queries), ...]
-QUERY_CONFIGURATIONS = [
-    (3, 10),    # Generate 10 queries of size 3 (max objects: ceil(0.5*3) = 2)
-    (5, 15),    # Generate 15 queries of size 5 (max objects: ceil(0.5*5) = 3)
-    (7, 20),    # Generate 20 queries of size 7 (max objects: ceil(0.5*7) = 4)
-    (10, 25),   # Generate 25 queries of size 10 (max objects: ceil(0.5*10) = 5)
-] 
+for q in queries:
+    print(q["y"], q["query"])
+print(graph.last_report["stop_reason"])        # why a run ended early, or ""
 ```
 
-## Configuration Options
+Each call returns a list of dicts. They are the records of the
+[JSON output](#output), so `json.dump(queries, f)` writes the file that the
+command-line tool writes. For the same options and seed, the module and the
+tool give the same queries.
 
-### General Parameters
-* `ENDPOINT`: URL of the SPARQL endpoint (required for endpoint-based generation and cardinality computation)
-* `QUERIES`: Number of queries to generate (single mode only)
-* `SIZE`: Number of triple patterns in the queries (single mode only)
-* `SHAPE`: Shape of subgraphs to generate - `"path"`, `"star"`, or `"complex"`
-* `DATASET`: Dataset name used for output file naming
-* `USE_CACHE`: Whether to use cached search structures for faster generation (default: True) - only for in-memory Generation
-* `IN_MEMORY`: Whether to use in-memory generation instead of SPARQL endpoint queries (default: True)
-* `RDF_FILE_PATH`: Path to the RDF file for in-memory generation (required when `IN_MEMORY=True`)
-* `GET_CARDINALITY`: Whether to compute cardinality for generated queries if in-memory(default: True)
+The options are the options of the command line as keyword arguments, with
+`_` in place of `-`:
 
-### Deduplication
-* `DEDUP_METHOD`: Method used to detect duplicate query patterns during generation - `"hash"` or `"wl"` (default: `"hash"`)
-  * **`"hash"`** — Hashes the sorted multiset of `(predicate, bound_object_or_?)` pairs. Very fast (~2 µs/query). Ignores join structure, so it may reject queries that have the same predicate/object multiset but different variable connectivity. This means it is **stricter** than necessary: it never keeps duplicates, but may discard some unique queries. Accurate for star queries (where the multiset fully determines the structure).
-  * **`"wl"`** — Computes a canonical form using Weisfeiler-Leman color refinement with individualize-and-refine. Still fast (~60 µs/query) but ~30x slower than hash. Respects the full join structure, so two queries are marked as duplicates only if they are truly isomorphic (identical up to variable renaming). Accurate for any query shape (stars, paths, cycles, diamonds, trees, etc.).
-
-  For star queries both methods are equivalent. For paths and complex shapes, `"wl"` will typically retain more unique queries (e.g., ~12% more on path queries in our tests). Use `"hash"` when speed is critical and a small loss of unique queries is acceptable; use `"wl"` when maximizing the number of unique query patterns matters.
-
-### Star-Specific Parameters
-* `MIN_OBJECTS_INSTANTIATED`: Minimum number of objects to keep instantiated (default: 0)
-* `MAX_OBJECTS_INSTANTIATED`: Maximum number of objects to keep instantiated (default: 5)
-* `P_PREDICATE`: Probability of instantiating predicates (1.0 = always, 0.0 = never, default: 1.0)
-
-**Note for Batch Mode:** In batch sampling, `MIN_OBJECTS_INSTANTIATED` and `MAX_OBJECTS_INSTANTIATED` are calculated dynamically based on query size:
-- `MIN_OBJECTS_INSTANTIATED = 0` (always)
-- `MAX_OBJECTS_INSTANTIATED = ceil(0.5 * query_size)`
-
-### Path-Specific Parameters
-* `SAMPLING_METHOD`: Sampling method for path generation - `"dfs"`, `"bfs"`, or `"random_walk"` (default: "dfs")
-* `P_EDGE`: Probability of instantiating a predicate in path queries (1.0 = always instantiate, 0.0 = never instantiate, default: 1.0)
-* `P_NODE`: Probability of instantiating an intermediate node in path queries (default: 0.3)
-* `P_START_END`: Probability of instantiating start/end node (non-seed) in path queries (default: 0.3)
-
-### Complex-Specific Parameters
-* `QUERY_SHAPE`: A shape string defining the query topology. Each comma-separated group is a triple pattern: `<subject> <predicate_binding> <object>`.
-
-**Node tokens:**
-* `?name` - always a variable in the generated query
-* `name` - always bound (instantiated with the matched URI)
-* `?name/B` - probabilistically bound (controlled by `P_NODE`)
-
-**Predicate tokens:**
-* `B` - always bound
-* `?` - always a variable
-* `?/B` - probabilistically bound (controlled by `P_EDGE`)
-
-Shared variable names across triples define the query topology. For example, `?o` appearing as the object in one triple and the subject in another creates a join.
-
-**Example shapes:**
-
-```
-# Binary tree depth 3 (6 triples):
-#          ?r
-#         / \
-#       ?a   ?b
-#       /\   /\
-#     ?c ?d ?e ?f
-QUERY_SHAPE = "?r B ?a, ?r B ?b, ?a B ?c, ?a B ?d, ?b B ?e, ?b B ?f"
-
-# Flower — path with stars at each node (7 triples):
-QUERY_SHAPE = "?a B ?l1, ?a B ?l2, ?a B ?b, ?b B ?m1, ?b B ?c, ?c B ?r1, ?c B ?r2"
-
-# Cycle / triangle (3 triples):
-QUERY_SHAPE = "?a B ?b, ?b B ?c, ?c B ?a"
-
-# Diamond (4 triples):
-QUERY_SHAPE = "?a B ?b, ?a B ?c, ?b B ?d, ?c B ?d"
-
-# Snowflake — star center with branching arms (8 triples):
-QUERY_SHAPE = "?center B ?a, ?center B ?b, ?center B ?c, ?center B ?d, ?a B ?l1, ?a B ?l2, ?b B ?r1, ?b B ?r2"
+```python
+queries = graph.sample("?p B ?a, ?p B ?b, ?a B ?c, ?b B ?d", num=5000,
+                       attempt_budget=100, novelty=1, skip_known=True, max_known=1,
+                       per_seed="auto", retire_seeds=True)
+paths = graph.sample_paths(3, num=1000, card_buckets=5, card_max=100000)
 ```
 
-The complex generator uses DFS-based subgraph matching with both forward and reverse adjacency lookups, so it supports shapes where a node appears as both subject and object (e.g., cycles, diamonds).
+A flag that starts with `--no-` becomes a keyword set to `False`
+(`cardinality=False`, `auto_prune=False`). `bgpgen.DEFAULTS` lists all
+options with their defaults. An option that a call does not know raises a
+`TypeError`. A file that cannot be read or a wrong template raises
+`bgpgen.BgpgenError`. Loading, sampling and counting release the GIL.
 
-### Batch-Specific Parameters
-* `QUERY_CONFIGURATIONS`: List of `(size, number_of_queries)` tuples defining the batch configurations. For `SHAPE = "complex"`, the size is derived from `QUERY_SHAPE` and the first element is ignored.
+`pip` also installs the command-line tool `bgpgen`.
 
-### Bulk Shape Generation
+### The Python sampler of version 1
 
-To generate queries for multiple shapes at once, use `generate_all_shapes.py`. Edit the `SHAPES` dictionary and configuration at the top of the file, then run:
+The first implementation of the sampler was written in pure Python. It is
+still in this repository (`sampler.py`, `batch_sampler.py`, `samplers/`) and
+is described in [docs/python-sampler.md](docs/python-sampler.md). Use it if
+you have to sample through a SPARQL endpoint, because the graph does not fit
+in memory. In every other case `bgpgen` is the better choice: it is faster by
+orders of magnitude and counts the results itself.
 
-```bash
-python generate_all_shapes.py
+## Performance
+
+Measured on an Apple Silicon laptop with all cores. The times of the C++
+engine include the exact cardinalities. The Python sampler needs an endpoint
+for them (1 to 3 s per query), so its times are without cardinalities.
+
+| | LUBM (1.0M triples) | Wikidata subset (21.4M triples) |
+|---|---|---|
+| Load and index | 0.35 s | 14.2 s |
+| 1000 star queries of size 4, with counts | 0.13 s | 1.7 s |
+| 1000 path queries of size 3, with counts | 0.02 s | 0.2 s |
+| Python sampler: load and 1000 stars of size 4 | | 64.4 s |
+| Python sampler: load and 1000 paths of size 3 | | 103.8 s |
+
+## Scope and limits
+
+- The queries are basic graph patterns. There is no `FILTER`, `OPTIONAL`,
+  `UNION` or property path.
+- Every query has at least one result on the graph. Queries with an empty
+  result are not produced.
+- The input format is N-Triples.
+- The graph has to fit in memory.
+- In path and complex queries, all nodes are IRIs. Literals appear only as
+  objects of star queries.
+- A template has to be connected.
+- The same seed gives the same workload on the same platform. The order of
+  random draws depends on the C++ standard library, so a Linux build and a
+  macOS build give different workloads for the same seed.
+- Counting stops after `--card-budget` steps. Such a query has `y = -1`.
+
+## Repository
+
+```
+cpp/                the C++ engine
+  include/, src/    library: parser, indexes, search, duplicate check, counter
+  cli/              the bgpgen binary
+  bindings/python/  the Python module
+  tests/            test suite (doctest)
+  bench/            drivers for the experiments on the sampling options
+  README.md         all options of the engine and how they work
+python/             the Python package and its tests
+pyproject.toml      build settings of the Python package
+examples/toy.nt     the graph used in this README
+docs/               logo, documentation of the Python sampler of version 1
+sampler.py, batch_sampler.py, samplers/   the Python sampler of version 1
 ```
 
-This produces one JSON file per shape, named `{DATASET}_{shape_name}.json`.
+## Tests
 
-## Generation Methods
+In a source checkout, after the build:
 
-### In-Memory Generation
-In-memory generation loads the entire RDF graph into memory and performs sampling directly on the in-memory structures. This approach:
-* Is significantly faster, especially for larger queries
-* Supports caching of search structures for faster repeated loading
-* Requires sufficient memory to load the entire graph
-* Is recommended for most use cases unless memory constraints prevent it
-* DFS is mostly recommended, especially for large and/or dense graphs
+```sh
+build/bgpgen_tests               # C++ engine: 44 test cases
+pip install . pytest
+pytest python/tests              # Python bindings: 12 tests
+python test_canonicalization.py  # duplicate check of the Python sampler of version 1
+```
 
-For complex shapes, the generator builds both forward and reverse adjacency lists and uses DFS-based subgraph matching to find instances of the specified query topology in the graph.
+The tests of the bindings also compare their output with the output of the
+command-line tool for the same seed. Every push runs these tests on Linux
+and macOS, and builds the wheels and binaries
+([workflows](.github/workflows)).
 
-### Endpoint-Based Generation
-Endpoint-based generation queries a SPARQL endpoint to perform sampling. This approach:
-* Has lower memory requirements
-* Is slower, particularly for larger queries and often does not find large paths
-* Requires a running SPARQL endpoint
-* May be necessary for very large graphs that don't fit in memory
-
-## Output
-Generated queries are saved to files in the current directory with names following the pattern:
-
-**Single mode:** `{DATASET}_{SHAPE}_{SIZE}_{timestamp}.txt`
-
-**Batch mode:** `{DATASET}_SIZE_{SIZE}_{SHAPE}_{SIZE}_{timestamp}.txt`
-
-When cardinality computation is enabled, results include both the query patterns and their cardinalities. 
+The counter is tested against a brute-force counter on random graphs, and
+was compared with a SPARQL endpoint on Wikidata (30 of 30 queries equal).
 
 ## Citation
 
-If you use this software in your research, please cite it as:
-
-> Schwabe, T., & Acosta, M. (2026). *rdf-subgraph-sampler: Sampling Subgraph Templates
-> and Cardinalities from RDF Knowledge Graphs* (Version 1.0.0) [Software].
-> Zenodo. https://doi.org/10.5281/zenodo.XXXXXXX
-
-**BibTeX:**
+If you use this software, please cite it:
 
 ```bibtex
 @software{schwabe_rdf_subgraph_sampler_2026,
@@ -259,7 +449,24 @@ If you use this software in your research, please cite it as:
   year      = {2026},
   version   = {1.0.0},
   publisher = {Zenodo},
-  doi       = {10.5281/zenodo.XXXXXXX},
+  doi       = {10.5281/zenodo.19729262},
   url       = {https://github.com/DE-TUM/rdf-subgraph-sampler}
 }
 ```
+
+The DOI [10.5281/zenodo.19729261](https://doi.org/10.5281/zenodo.19729261)
+always points to the latest release.
+
+## Maintenance and contact
+
+**Maintainer:** Tim Schwabe, Technical University of Munich
+([Data Engineering Group](https://www.cs.cit.tum.de/cde/homepage/), led by Prof. Maribel Acosta).
+
+Questions and bug reports: please open an
+[issue](https://github.com/DE-TUM/rdf-subgraph-sampler/issues) or write to
+`tim.schwabe@tum.de`.
+
+## License
+
+Apache License 2.0, see [LICENSE](LICENSE). The test framework doctest in
+`cpp/third_party/` is under the MIT license.
