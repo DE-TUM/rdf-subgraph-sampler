@@ -19,6 +19,9 @@ if(BGPGEN_PYTHON)
 endif()
 
 find_package(ZLIB)
+# Needed at link time on systems with glibc older than 2.34.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
 
 function(bgpgen_set_warnings target)
   if(MSVC)
@@ -49,6 +52,7 @@ add_library(bgpgen_core STATIC
   src/workload.cpp
 )
 target_include_directories(bgpgen_core PUBLIC include)
+target_link_libraries(bgpgen_core PUBLIC Threads::Threads)
 if(ZLIB_FOUND)
   target_compile_definitions(bgpgen_core PRIVATE BGPGEN_HAVE_ZLIB)
   target_link_libraries(bgpgen_core PRIVATE ZLIB::ZLIB)
